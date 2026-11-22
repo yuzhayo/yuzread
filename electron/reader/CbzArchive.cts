@@ -14,7 +14,12 @@ import type {
   ReaderCatalog,
   Chapter,
   ReaderPrepareResult,
+  ReaderWorkPriority,
+  ReaderBudget,
+  Failure,
   Result,
+  ReaderMetricEvent,
+  ReaderMetricValue,
 } from '../../ShellHost.js';
 import { errorText, isRecord } from '../WindowConfig.cjs';
 
@@ -23,6 +28,291 @@ const SCHEME = 'yuzread-page';
 const MAX_WIDTH = 8192,
   MAX_PENDING = 64,
   MB = 1048576;
+const WORKER_BYTES = 8 * MB,
+  SURFACE_BYTES = 8;
+class DeferredDecodeError extends Error {}
+class CancelledDecodeError extends Error {}
+export const readerWorkRank = (priority: ReaderWorkPriority): number =>
+  priority === 'demand' ? 0 : priority === 'visible' ? 1 : 2;
+const workPriority = (value: unknown): value is ReaderWorkPriority =>
+  value === 'demand' || value === 'visible' || value === 'background';
+
+// DIAGNOSTICS — an opt-in bounded log, separate from shell/config issue records.
+const metricValue = (value: unknown): value is ReaderMetricValue =>
+  typeof value === 'boolean' ||
+  (typeof value === 'string' && value.length <= 128) ||
+  (typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= 1e12);
+export const isReaderMetricEvent = (value: unknown): value is ReaderMetricEvent =>
+  isRecord(value) &&
+  typeof value.kind === 'string' &&
+  ['image', 'attach', 'frame-gap', 'frame-summary', 'long-task', 'scroll-jump', 'motion'].includes(
+    value.kind,
+  ) &&
+  typeof value.clockMs === 'number' &&
+  Number.isFinite(value.clockMs) &&
+  value.clockMs >= 0 &&
+  value.clockMs <= 1e12 &&
+  Object.keys(value).every((key) => ['kind', 'clockMs', 'values'].includes(key)) &&
+  isRecord(value.values) &&
+  Object.keys(value.values).length <= 16 &&
+  Object.entries(value.values).every(
+    ([key, item]) => /^[a-zA-Z][a-zA-Z0-9]{0,31}$/.test(key) && metricValue(item),
+  );
+export function readerDiagnosticsEnabled(config: unknown): boolean {
+  if (!isRecord(config) || !Array.isArray(config.areas)) return false;
+  return config.areas.some(
+    (area: unknown) =>
+      isRecord(area) &&
+      area.enabled === true &&
+      Array.isArray(area.children) &&
+      area.children.some(
+        (child: unknown) =>
+          isRecord(child) &&
+          child.enabled === true &&
+          child.componentId === 'reader.cbz' &&
+          child.diagnostics === true,
+      ),
+  );
+}
+interface ReaderLogEvent {
+  kind: string;
+  clockMs: number;
+  values: Record<string, ReaderMetricValue>;
+}
+export function createReaderDiagnosticLog(filePath: string, maximumBytes = 4 * MB) {
+  const pending: string[] = [];
+  let timer: NodeJS.Timeout | null = null,
+    writing: Promise<Result> | null = null;
+  let size: number | undefined,
+    dropped = 0,
+    capped = false,
+    closed = false,
+    failed = false;
+  const line = (source: 'native' | 'renderer', event: ReaderLogEvent) =>
+    JSON.stringify({ source, at: new Date().toISOString(), ...event }) + '\n';
+  const schedule = () => {
+    if (timer || writing || !pending.length || closed || failed || capped) return;
+    timer = setTimeout(() => {
+      timer = null;
+      void flush();
+    }, 500);
+    timer.unref();
+  };
+  const record = (source: 'native' | 'renderer', event: ReaderLogEvent) => {
+    if (closed || failed || capped) return;
+    if (pending.length >= 256) {
+      dropped++;
+      return;
+    }
+    pending.push(line(source, event));
+    schedule();
+  };
+  const flush = (): Promise<Result> => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+    if (writing) return writing.then(() => flush());
+    if (failed) return Promise.resolve({ ok: false, error: 'Reader diagnostics log unavailable' });
+    if (!pending.length || capped) return Promise.resolve({ ok: true });
+    const batch = pending.splice(0);
+    if (dropped) {
+      batch.push(
+        line('native', { kind: 'dropped', clockMs: performance.now(), values: { count: dropped } }),
+      );
+      dropped = 0;
+    }
+    batch.push(
+      line('native', {
+        kind: 'memory',
+        clockMs: performance.now(),
+        values: { mainProcessRssBytes: process.memoryUsage.rss(), scope: 'main-process-only' },
+      }),
+    );
+    const task = (async (): Promise<Result> => {
+      if (size === undefined) {
+        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        size = await fs
+          .stat(filePath)
+          .then((stat) => stat.size)
+          .catch(() => 0);
+      }
+      let output = '';
+      for (const item of batch) {
+        const bytes = Buffer.byteLength(item);
+        if (size + Buffer.byteLength(output) + bytes > maximumBytes - 256) {
+          capped = true;
+          break;
+        }
+        output += item;
+      }
+      if (capped) {
+        const notice = line('native', {
+          kind: 'log-cap',
+          clockMs: performance.now(),
+          values: { limitBytes: maximumBytes },
+        });
+        if (size + Buffer.byteLength(output) + Buffer.byteLength(notice) <= maximumBytes)
+          output += notice;
+        pending.length = 0;
+      }
+      if (output) {
+        await fs.appendFile(filePath, output, 'utf8');
+        size += Buffer.byteLength(output);
+      }
+      return { ok: true };
+    })().catch((): Result => {
+      failed = true;
+      pending.length = 0;
+      return { ok: false, error: 'Reader diagnostics log unavailable' };
+    });
+    writing = task;
+    void task.finally(() => {
+      writing = null;
+      schedule();
+    });
+    return task;
+  };
+  return {
+    record,
+    flush,
+    async close() {
+      closed = true;
+      return flush();
+    },
+  };
+}
+interface ReaderWorkObservation {
+  key: string;
+  owner: string;
+  priority: ReaderWorkPriority;
+  queuedMs: number;
+  workMs: number;
+  outcome: string;
+}
+
+// SCHEDULER — one native queue for every catalog/worker, with one active operation.
+// An active page finishes normally; queued demand wins at the next job boundary.
+export function createReaderScheduler(
+  maximum = MAX_PENDING,
+  observe?: (sample: ReaderWorkObservation) => void,
+) {
+  interface Job {
+    key: string;
+    owner: string;
+    priority: ReaderWorkPriority;
+    serial: number;
+    queuedAt: number;
+    execute(): Promise<void>;
+    cancel(error: Error): void;
+  }
+  const jobs = new Map<string, Job>();
+  let serial = 0,
+    active: Job | null = null,
+    scheduled = false,
+    disposed = false;
+  const drain = () => {
+    if (active || scheduled || disposed || !jobs.size) return;
+    scheduled = true;
+    setImmediate(() => {
+      scheduled = false;
+      if (disposed || active) return;
+      const job = [...jobs.values()].sort(
+        (a, b) => readerWorkRank(a.priority) - readerWorkRank(b.priority) || a.serial - b.serial,
+      )[0];
+      if (!job) return;
+      jobs.delete(job.key);
+      active = job;
+      void job.execute().finally(() => {
+        active = null;
+        drain();
+      });
+    });
+  };
+  return {
+    run<T>(
+      key: string,
+      owner: string,
+      priority: ReaderWorkPriority,
+      operation: () => Promise<T>,
+    ): Promise<T> {
+      if (disposed) return Promise.reject(new Error('Reader scheduler closed'));
+      if (jobs.size >= maximum)
+        return Promise.reject(new DeferredDecodeError('Reader work queue is full'));
+      if (jobs.has(key) || active?.key === key)
+        return Promise.reject(new Error('Duplicate reader work key'));
+      return new Promise<T>((resolve, reject) => {
+        jobs.set(key, {
+          key,
+          owner,
+          priority,
+          serial: ++serial,
+          queuedAt: observe ? performance.now() : 0,
+          cancel: reject,
+          async execute() {
+            const start = observe ? performance.now() : 0;
+            let outcome = 'ok';
+            try {
+              resolve(await operation());
+            } catch (error) {
+              outcome =
+                error instanceof DeferredDecodeError
+                  ? 'deferred'
+                  : error instanceof CancelledDecodeError
+                    ? 'cancelled'
+                    : 'error';
+              reject(error);
+            } finally {
+              if (observe)
+                try {
+                  observe({
+                    key,
+                    owner,
+                    priority: this.priority,
+                    queuedMs: start - this.queuedAt,
+                    workMs: performance.now() - start,
+                    outcome,
+                  });
+                } catch {}
+            }
+          },
+        });
+        drain();
+      });
+    },
+    promote(key: string, priority: ReaderWorkPriority) {
+      const job = jobs.get(key);
+      if (job && readerWorkRank(priority) < readerWorkRank(job.priority)) job.priority = priority;
+    },
+    cancel(owner: string) {
+      for (const [key, job] of jobs)
+        if (job.owner === owner) {
+          jobs.delete(key);
+          job.cancel(new CancelledDecodeError('Reader work owner released'));
+          if (observe)
+            try {
+              observe({
+                key,
+                owner,
+                priority: job.priority,
+                queuedMs: performance.now() - job.queuedAt,
+                workMs: 0,
+                outcome: 'cancelled',
+              });
+            } catch {}
+        }
+    },
+    snapshot() {
+      return { activeJobs: active ? 1 : 0, queuedJobs: jobs.size };
+    },
+    dispose() {
+      disposed = true;
+      for (const job of jobs.values())
+        job.cancel(new CancelledDecodeError('Reader scheduler closed'));
+      jobs.clear();
+    },
+  };
+}
 export interface SourceFingerprint {
   size: string;
   mtimeNs: string;
@@ -146,10 +436,17 @@ interface ArchiveWorkerData {
   source: SourceFingerprint;
   sourceRevision: string;
   settings: WorkerSettings;
+  diagnostics: boolean;
 }
 type WorkerRequest =
-  | { requestId: number; operation: 'open' }
-  | { requestId: number; operation: 'prepare'; index: number; decodeWidth: number };
+  | { requestId: number; operation: 'open'; availableBytes: number }
+  | {
+      requestId: number;
+      operation: 'prepare';
+      index: number;
+      decodeWidth: number;
+      availableBytes: number;
+    };
 interface PreparedPage {
   index: number;
   width: number;
@@ -158,17 +455,19 @@ interface PreparedPage {
   sourceRevision: string;
   bytes: number;
   sha256: string;
+  timing?: { inputMs: number; imageMs: number; cacheHit: boolean };
 }
 type WorkerReply =
-  | { requestId: number; ok: true; value: ChapterManifest | PreparedPage }
-  | { requestId: number; ok: false; error: string };
-type PendingRequest =
+  | { requestId: number; ok: true; value: ChapterManifest | PreparedPage; residentBytes: number }
+  | { requestId: number; ok: false; error: string; deferred?: true; residentBytes: number };
+type PendingRequest = { availableBytes: number } & (
   | { operation: 'open'; resolve: (value: ChapterManifest) => void; reject: (error: Error) => void }
   | {
       operation: 'prepare';
       resolve: (value: PreparedPage) => void;
       reject: (error: Error) => void;
-    };
+    }
+);
 interface ArchiveSession {
   catalogId: string;
   entryId: string;
@@ -185,8 +484,13 @@ interface ArchiveSession {
   renderWidth: number;
   pageCount: number;
   rejectAll: (error: Error) => void;
-  request(operation: 'open'): Promise<ChapterManifest>;
-  request(operation: 'prepare', index: number, decodeWidth: number): Promise<PreparedPage>;
+  request(operation: 'open', availableBytes: number): Promise<ChapterManifest>;
+  request(
+    operation: 'prepare',
+    availableBytes: number,
+    index: number,
+    decodeWidth: number,
+  ): Promise<PreparedPage>;
 }
 interface CatalogEntry {
   id: string;
@@ -234,6 +538,7 @@ const isPrepared = (value: unknown): value is PreparedPage =>
   digest(value.sha256);
 const isWorkerData = (value: unknown): value is ArchiveWorkerData =>
   isRecord(value) &&
+  typeof value.diagnostics === 'boolean' &&
   typeof value.filePath === 'string' &&
   typeof value.directory === 'string' &&
   positive(value.renderWidth) &&
@@ -258,6 +563,10 @@ const isWorkerData = (value: unknown): value is ArchiveWorkerData =>
 const isWorkerRequest = (value: unknown): value is WorkerRequest =>
   isRecord(value) &&
   positive(value.requestId) &&
+  typeof value.availableBytes === 'number' &&
+  Number.isSafeInteger(value.availableBytes) &&
+  value.availableBytes >= 0 &&
+  value.availableBytes <= 4096 * MB &&
   (value.operation === 'open' ||
     (value.operation === 'prepare' &&
       typeof value.index === 'number' &&
@@ -304,14 +613,17 @@ async function runArchiveWorker() {
     inputCosts = new Map<number, number>();
   let initialReserved = 0,
     extraReserved = 0,
-    indexed = false;
+    indexed = false,
+    baseReserved = false,
+    availableBytes = settings.maxDecodedBytes;
+  const residentBytes = () => (baseReserved ? initialReserved : 0) + extraReserved;
   const imageOptions = { limitInputPixels: settings.maxInputPixels, failOn: 'error' } as const;
   const bytes = async (entry: IndexedEntry, maximum = settings.maxEntryBytes): Promise<Buffer> => {
     const archive = zip;
     if (!archive) throw new Error('Archive is not open');
     const headerOnly = maximum < entry.uncompressedSize;
-    if (!headerOnly && entry.uncompressedSize * 2 + MB > settings.maxDecodedBytes)
-      throw new Error('Page input buffer exceeds the configured decoded budget');
+    if (Math.min(entry.uncompressedSize, maximum) * 2 + MB > availableBytes)
+      throw new DeferredDecodeError('Page input workspace exceeds the available reader budget');
     const stream = await new Promise<import('node:stream').Readable>((resolve, reject) =>
       archive.openReadStream(entry, (error, value) => {
         if (error || !value) reject(error ?? new Error('Archive stream unavailable'));
@@ -409,7 +721,7 @@ async function runArchiveWorker() {
       const targetWidth = Math.min(width, outputWidth),
         targetHeight = Math.max(1, Math.round((height * targetWidth) / width));
       estimatedBytes += targetWidth * targetHeight * 4;
-      initialReserved += targetWidth * (targetHeight + 1) * 4;
+      initialReserved += targetWidth * (targetHeight + 1) * SURFACE_BYTES;
       const depthBytes: Record<string, number> = {
         uchar: 1,
         char: 1,
@@ -474,31 +786,39 @@ async function runArchiveWorker() {
     if (cached) {
       if (await verifyCache(data.directory, cached)) {
         await assertSource(data.filePath, data.source);
-        return cached;
+        return data.diagnostics
+          ? { ...cached, timing: { inputMs: 0, imageMs: 0, cacheHit: true } }
+          : cached;
       }
       variants.delete(key);
       extraReserved -= variantCosts.get(key) ?? 0;
       variantCosts.delete(key);
     }
-    const extraCost = target === page.targetWidth ? 0 : target * (height + 1) * 4,
+    const extraCost = target === page.targetWidth ? 0 : target * (height + 1) * SURFACE_BYTES,
       workspace = inputCosts.get(index);
     if (
       workspace === undefined ||
       !Number.isSafeInteger(extraCost) ||
-      initialReserved + extraReserved + extraCost + workspace > settings.maxDecodedBytes
+      initialReserved + extraReserved + extraCost + workspace > availableBytes
     )
-      throw new Error(
-        'Prepared variants and decode workspace exceed the configured chapter budget',
+      throw new DeferredDecodeError(
+        'Prepared surfaces, variants and decode workspace exceed the available reader budget',
       );
     const identity = { sourceRevision: data.sourceRevision, pageId: page.id, width: target };
     const file = cacheFile(data.directory, identity),
       temporary = path.join(data.directory, `.prepare-${randomUUID()}.tmp`);
+    baseReserved = true;
     try {
-      const info = await sharp(await bytes(entry), imageOptions)
+      const inputStart = data.diagnostics ? performance.now() : 0;
+      const input = await bytes(entry);
+      const inputMs = data.diagnostics ? performance.now() - inputStart : 0;
+      const imageStart = data.diagnostics ? performance.now() : 0;
+      const info = await sharp(input, imageOptions)
         .rotate()
         .resize({ width: target, withoutEnlargement: true })
         .png({ compressionLevel: 1 })
         .toFile(temporary);
+      const imageMs = data.diagnostics ? performance.now() - imageStart : 0;
       if (
         info.format !== 'png' ||
         info.width !== target ||
@@ -529,7 +849,9 @@ async function runArchiveWorker() {
       variants.set(key, variant);
       variantCosts.set(key, extraCost);
       extraReserved += extraCost;
-      return variant;
+      return data.diagnostics
+        ? { ...variant, timing: { inputMs, imageMs, cacheHit: false } }
+        : variant;
     } finally {
       await fs.rm(temporary, { force: true });
     }
@@ -544,6 +866,7 @@ async function runArchiveWorker() {
           isRecord(message) && typeof message.requestId === 'number' ? message.requestId : -1,
         ok: false,
         error: 'Archive worker queue is full',
+        residentBytes: residentBytes(),
       });
       return;
     }
@@ -553,13 +876,20 @@ async function runArchiveWorker() {
         isRecord(message) && typeof message.requestId === 'number' ? message.requestId : -1;
       try {
         if (!isWorkerRequest(message)) throw new Error('Unknown archive worker operation');
+        availableBytes = Math.min(settings.maxDecodedBytes, message.availableBytes);
         const value =
           message.operation === 'open'
             ? await open()
             : await prepare(message.index, message.decodeWidth);
-        send({ requestId, ok: true, value });
+        send({ requestId, ok: true, value, residentBytes: residentBytes() });
       } catch (error) {
-        send({ requestId, ok: false, error: errorText(error) });
+        send({
+          requestId,
+          ok: false,
+          error: errorText(error),
+          residentBytes: residentBytes(),
+          ...(error instanceof DeferredDecodeError ? { deferred: true } : {}),
+        });
       } finally {
         queued--;
       }
@@ -583,11 +913,142 @@ export function registerReaderScheme() {
     },
   ]);
 }
-export function createCbzReader(window: BrowserWindow, runtimeDirectory: string) {
-  const { dialog, protocol }: typeof import('electron') = require('electron');
+export function createCbzReader(
+  window: BrowserWindow,
+  runtimeDirectory: string,
+  screenConfig?: unknown,
+) {
+  const { app, dialog, protocol, screen }: typeof import('electron') = require('electron');
+  const diagnostics = readerDiagnosticsEnabled(screenConfig);
+  const diagnosticLog = diagnostics
+    ? createReaderDiagnosticLog(path.join(path.dirname(runtimeDirectory), 'reader-diagnostics.log'))
+    : null;
   const sessions = new Map<string, ArchiveSession>(),
     catalogs = new Map<string, ArchiveCatalog>(),
-    closing = new Map<string, Promise<void>>();
+    closing = new Map<string, Promise<void>>(),
+    stopping = new Map<string, Promise<number>>(),
+    reservations = new Map<string, number>();
+  const scheduler = createReaderScheduler(
+    MAX_PENDING,
+    diagnosticLog
+      ? (sample) => {
+          diagnosticLog.record('native', {
+            kind: 'work',
+            clockMs: performance.now(),
+            values: { ...sample, ...budget(), memoryMetric: 'estimated-admission' },
+          });
+        }
+      : undefined,
+  );
+  let budgetLimit = 64 * MB;
+  let gpuObserved = false;
+  let grant: { owner: string; limitBytes: number } | null = null;
+  const totalResident = () => [...reservations.values()].reduce((sum, bytes) => sum + bytes, 0);
+  const budget = (): ReaderBudget => ({
+    limitBytes: budgetLimit,
+    residentBytes: totalResident(),
+    inFlightBytes: grant ? Math.max(0, grant.limitBytes - (reservations.get(grant.owner) ?? 0)) : 0,
+    ...scheduler.snapshot(),
+  });
+  const failure = (error: unknown): Failure => {
+    if (diagnosticLog)
+      diagnosticLog.record('native', {
+        kind: 'failure',
+        clockMs: performance.now(),
+        values: {
+          outcome:
+            error instanceof DeferredDecodeError
+              ? 'deferred'
+              : error instanceof CancelledDecodeError
+                ? 'cancelled'
+                : 'error',
+          ...budget(),
+          memoryMetric: 'estimated-admission',
+        },
+      });
+    return {
+      ok: false,
+      error: errorText(error),
+      budget: budget(),
+      ...(error instanceof DeferredDecodeError
+        ? { code: 'deferred' }
+        : error instanceof CancelledDecodeError
+          ? { code: 'cancelled' }
+          : {}),
+    };
+  };
+  const environment = () => {
+    if (!diagnosticLog || window.isDestroyed()) return;
+    const display = screen.getDisplayMatching(window.getBounds());
+    diagnosticLog.record('native', {
+      kind: 'environment',
+      clockMs: performance.now(),
+      values: {
+        displayHz: display.displayFrequency,
+        scaleFactor: display.scaleFactor,
+        electron: process.versions.electron ?? 'unknown',
+        chrome: process.versions.chrome ?? 'unknown',
+        backend: 'sharp-cpu',
+        frameMetric: 'raf-callback-cadence',
+        presentedFrames: 'not-collected',
+        gpuStatus: gpuObserved ? 'available-after-info-update' : 'not-observed',
+      },
+    });
+  };
+  const gpuInfo = () => {
+    if (!diagnosticLog) return;
+    gpuObserved = true;
+    const status = app.getGPUFeatureStatus();
+    diagnosticLog.record('native', {
+      kind: 'gpu-features',
+      clockMs: performance.now(),
+      values: {
+        compositing: status.gpu_compositing,
+        rasterization: status.rasterization,
+        videoDecode: status.video_decode,
+        imageBackend: 'sharp-cpu',
+      },
+    });
+  };
+  if (diagnosticLog) {
+    environment();
+    app.on('gpu-info-update', gpuInfo);
+  }
+  const available = (catalog: ArchiveCatalog, id: string) =>
+    Math.max(
+      0,
+      Math.min(
+        catalog.options.maxDecodedMB * MB,
+        budgetLimit - (totalResident() - (reservations.get(id) ?? 0)),
+      ) - WORKER_BYTES,
+    );
+  const withGrant = async <T,>(
+    catalog: ArchiveCatalog,
+    id: string,
+    operation: (bytes: number) => Promise<T>,
+  ): Promise<T> => {
+    const bytes = available(catalog, id);
+    grant = { owner: id, limitBytes: bytes + WORKER_BYTES };
+    try {
+      return await operation(bytes);
+    } finally {
+      try {
+        // A rejected request alone does not mean its worker has stopped. Keep
+        // this scheduler slot/lease until retirement actually settles.
+        const retired = closing.get(id) ?? stopping.get(id);
+        if (retired) {
+          try {
+            await retired;
+          } catch (error) {
+            scheduler.dispose();
+            throw error;
+          }
+        }
+      } finally {
+        grant = null;
+      }
+    }
+  };
   let disposed = false,
     choosing = false;
   const active = (id: string, session: ArchiveSession) =>
@@ -646,10 +1107,13 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
     const session = sessions.get(id);
     if (!session) return;
     sessions.delete(id);
+    scheduler.cancel(id);
     session.ready.clear();
     session.pendingVariants.clear();
     session.rejectAll(new Error('Chapter closed'));
-    await session.worker.terminate();
+    await (stopping.get(id) ?? session.worker.terminate());
+    stopping.delete(id);
+    reservations.delete(id); // Keep the estimate held until the worker genuinely stops.
     await fs.rm(session.directory, { recursive: true, force: true });
   };
   const release = (id: string) => {
@@ -668,6 +1132,7 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
     const catalog = catalogs.get(id);
     if (!catalog) return;
     catalogs.delete(id); // Retire authorization before awaiting workers or queued opens.
+    scheduler.cancel(id);
     await Promise.allSettled(
       [...sessions].filter(([, session]) => session.catalogId === id).map(([key]) => release(key)),
     );
@@ -708,6 +1173,12 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
       requests: new Map(),
     };
     if (disposed || window.isDestroyed()) throw new Error('Reader closed');
+    // A new authorized Open may raise the limit, but never shrink it under live
+    // reservations. Equal configured budgets are shared, not multiplied by catalogs.
+    budgetLimit =
+      reservations.size || grant
+        ? Math.max(budgetLimit, options.maxDecodedMB * MB)
+        : options.maxDecodedMB * MB;
     catalogs.set(catalog.id, catalog);
     return { catalog, entry };
   };
@@ -732,6 +1203,9 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         await fs.rm(directory, { recursive: true, force: true });
         throw new Error('Reader closed');
       }
+      if (available(catalog, id) < MB)
+        throw new DeferredDecodeError('Reader budget cannot admit another archive worker');
+      reservations.set(id, WORKER_BYTES);
       const data: ArchiveWorkerData = {
         filePath,
         directory,
@@ -739,6 +1213,7 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         maxDecodeWidth: options.maxDecodeWidth,
         source,
         sourceRevision,
+        diagnostics,
         settings: {
           maxArchiveEntries: 10000,
           maxEntryBytes: 128 * 1048576,
@@ -764,8 +1239,24 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         const request = pending.get(message.requestId);
         if (!request) return;
         pending.delete(message.requestId);
+        if (
+          typeof message.residentBytes !== 'number' ||
+          !Number.isSafeInteger(message.residentBytes) ||
+          message.residentBytes < 0 ||
+          message.residentBytes > request.availableBytes
+        ) {
+          const error = new Error('Invalid worker resource accounting');
+          request.reject(error);
+          rejectAll(error);
+          return;
+        }
+        reservations.set(sessionId, WORKER_BYTES + message.residentBytes);
         if (message.ok === false && typeof message.error === 'string')
-          request.reject(new Error(message.error));
+          request.reject(
+            message.deferred === true
+              ? new DeferredDecodeError(message.error)
+              : new Error(message.error),
+          );
         else if (message.ok === true && request.operation === 'open' && isManifest(message.value))
           request.resolve(message.value);
         else if (
@@ -776,16 +1267,28 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
           request.resolve(message.value);
         else request.reject(new Error('Invalid worker result for requested operation'));
       });
-      worker.on('error', rejectAll);
-      worker.on('exit', () => rejectAll(new Error('Archive worker stopped')));
-      function request(operation: 'open'): Promise<ChapterManifest>;
+      worker.on('error', (error) => {
+        rejectAll(error);
+        const task = worker.terminate();
+        stopping.set(sessionId, task);
+        void task.catch(() => {
+          scheduler.dispose();
+        });
+      });
+      worker.on('exit', (code) => {
+        stopping.set(sessionId, Promise.resolve(code));
+        rejectAll(new Error('Archive worker stopped'));
+      });
+      function request(operation: 'open', availableBytes: number): Promise<ChapterManifest>;
       function request(
         operation: 'prepare',
+        availableBytes: number,
         index: number,
         decodeWidth: number,
       ): Promise<PreparedPage>;
       function request(
         operation: 'open' | 'prepare',
+        availableBytes: number,
         index?: number,
         decodeWidth?: number,
       ): Promise<ChapterManifest | PreparedPage> {
@@ -795,22 +1298,24 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         if (operation === 'open')
           return new Promise<ChapterManifest>((resolve, reject) => {
             const requestId = ++serial;
-            pending.set(requestId, { operation, resolve, reject });
-            worker.postMessage({ requestId, operation } satisfies WorkerRequest);
+            pending.set(requestId, { operation, resolve, reject, availableBytes });
+            worker.postMessage({ requestId, operation, availableBytes } satisfies WorkerRequest);
           });
         if (index === undefined || decodeWidth === undefined)
           return Promise.reject(new Error('Missing preparation settings'));
         return new Promise<PreparedPage>((resolve, reject) => {
           const requestId = ++serial;
-          pending.set(requestId, { operation, resolve, reject });
+          pending.set(requestId, { operation, resolve, reject, availableBytes });
           worker.postMessage({
             requestId,
             operation,
             index,
             decodeWidth,
+            availableBytes,
           } satisfies WorkerRequest);
         });
       }
+      const sessionId = id;
       const session: ArchiveSession = {
         catalogId: catalog.id,
         entryId: entry.id,
@@ -829,7 +1334,7 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         request,
       };
       sessions.set(id, session);
-      const chapter = await session.request('open');
+      const chapter = await withGrant(catalog, id, (bytes) => session.request('open', bytes));
       assertActive(id, session);
       if (chapter.sourceRevision !== sourceRevision) throw new Error('Archive revision mismatch');
       await assertSource(filePath, source);
@@ -838,19 +1343,23 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
       session.pages = chapter.pages;
       const result: Chapter = { ...chapter, id, catalogId: catalog.id, entryId: entry.id };
       session.chapter = result;
-      return { ok: true, chapter: result };
+      return { ok: true, chapter: result, budget: budget() };
     } catch (error) {
       if (id) await release(id).catch(() => {});
+      if (id && !sessions.has(id) && !closing.has(id)) reservations.delete(id);
       if (directory) await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
-      return { ok: false, error: errorText(error) };
+      return failure(error);
     }
   };
   const readChapter = (
     catalog: ArchiveCatalog,
     entry: CatalogEntry,
     options: ReaderOpenOptions,
+    priority: ReaderWorkPriority,
   ): Promise<ReaderChapterResult> => {
     const pending = catalog.requests.get(entry.id);
+    const key = `open:${catalog.id}:${entry.id}`;
+    scheduler.promote(key, priority);
     if (pending)
       return pending.width === options.renderWidth
         ? pending.task
@@ -861,12 +1370,14 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
     if (existing?.chapter)
       return Promise.resolve(
         existing.renderWidth === options.renderWidth
-          ? { ok: true, chapter: existing.chapter }
+          ? { ok: true, chapter: existing.chapter, budget: budget() }
           : { ok: false, error: 'Chapter is already resident at another width' },
       );
     if (catalog.requests.size >= MAX_PENDING || sessions.size >= MAX_PENDING)
       return Promise.resolve({ ok: false, error: 'Chapter request limit reached' });
-    const task = openEntry(catalog, entry, options);
+    const task = scheduler
+      .run(key, catalog.id, priority, () => openEntry(catalog, entry, options))
+      .catch(failure);
     catalog.requests.set(entry.id, { width: options.renderWidth, task });
     void task
       .finally(() => {
@@ -879,7 +1390,12 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
     async open(options: unknown): Promise<ReaderOpenResult> {
       if (disposed || choosing) return { ok: false, error: 'Another Open operation is active' };
       if (!openOptions(options)) return { ok: false, error: 'Invalid reader preparation settings' };
+      environment();
       choosing = true;
+      // The picker pauses the old reading context. Preserve accepted surfaces and
+      // an active operation, but cancel its queued work so initial Open has priority.
+      for (const key of catalogs.keys()) scheduler.cancel(key);
+      for (const key of sessions.keys()) scheduler.cancel(key);
       let authorized: ArchiveCatalog | undefined;
       try {
         const selection = await dialog.showOpenDialog(window, {
@@ -892,17 +1408,20 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         if (disposed || window.isDestroyed()) throw new Error('Reader closed');
         const { catalog, entry } = await authorize(selected, options);
         authorized = catalog;
-        const result = await readChapter(catalog, entry, options);
-        if (!result.ok) throw new Error(result.error);
+        const result = await readChapter(catalog, entry, options, 'visible');
+        if (!result.ok)
+          throw result.code === 'deferred'
+            ? new DeferredDecodeError(result.error)
+            : new Error(result.error);
         assertCatalog(catalog);
         const publicCatalog: ReaderCatalog = {
           id: catalog.id,
           chapters: catalog.entries.map(({ id, name }) => ({ id, name })),
         };
-        return { ...result, catalog: publicCatalog };
+        return { ...result, catalog: publicCatalog, budget: budget() };
       } catch (error) {
         if (authorized) await releaseCatalog(authorized.id);
-        return { ok: false, error: errorText(error) };
+        return failure(error);
       } finally {
         choosing = false;
       }
@@ -911,6 +1430,7 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
       catalogId: unknown,
       entryId: unknown,
       options: unknown,
+      priority: unknown = 'background',
     ): Promise<ReaderChapterResult> {
       const catalog = typeof catalogId === 'string' ? catalogs.get(catalogId) : undefined;
       const entry =
@@ -921,13 +1441,19 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         return { ok: false, error: 'Unauthorized chapter identity' };
       if (
         !openOptions(options) ||
+        !workPriority(priority) ||
         options.maxDecodeWidth !== catalog.options.maxDecodeWidth ||
         options.maxDecodedMB !== catalog.options.maxDecodedMB
       )
         return { ok: false, error: 'Invalid or unauthorized chapter settings' };
-      return readChapter(catalog, entry, options);
+      return readChapter(catalog, entry, options, priority);
     },
-    async prepare(id: unknown, index: unknown, decodeWidth: unknown): Promise<ReaderPrepareResult> {
+    async prepare(
+      id: unknown,
+      index: unknown,
+      decodeWidth: unknown,
+      priority: unknown = 'visible',
+    ): Promise<ReaderPrepareResult> {
       const session = typeof id === 'string' ? sessions.get(id) : undefined;
       if (
         !session ||
@@ -938,20 +1464,53 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
         index >= session.pageCount
       )
         return { ok: false, error: 'Chapter/page unavailable' };
-      if (!positive(decodeWidth) || decodeWidth > MAX_WIDTH || decodeWidth > session.maxDecodeWidth)
+      if (
+        !positive(decodeWidth) ||
+        decodeWidth > MAX_WIDTH ||
+        decodeWidth > session.maxDecodeWidth ||
+        !workPriority(priority)
+      )
         return { ok: false, error: 'Invalid or unauthorized decode width' };
       const page = session.pages[index];
       if (!page) return { ok: false, error: 'Page metadata unavailable' };
       const width = Math.min(page.width, decodeWidth),
         height = Math.max(1, Math.round((page.height * width) / page.width)),
         key = `${index}-${width}`;
+      const workKey = `prepare:${id}:${key}`;
+      const catalog = catalogs.get(session.catalogId);
+      if (!catalog) return { ok: false, error: 'Reading catalog unavailable' };
       try {
         assertActive(id, session);
         await assertSource(session.filePath, session.source);
         assertActive(id, session);
         let task = session.pendingVariants.get(key);
+        scheduler.promote(workKey, priority);
         if (!task) {
-          task = session.request('prepare', index, width).then(async (variant) => {
+          task = scheduler.run(workKey, id, priority, async () => {
+            assertActive(id, session);
+            const variant = await withGrant(catalog, id, (bytes) =>
+              session.request('prepare', bytes, index, width),
+            );
+            if (
+              diagnosticLog &&
+              variant.timing &&
+              typeof variant.timing.cacheHit === 'boolean' &&
+              Number.isFinite(variant.timing.inputMs) &&
+              Number.isFinite(variant.timing.imageMs)
+            ) {
+              diagnosticLog.record('native', {
+                kind: 'image',
+                clockMs: performance.now(),
+                values: {
+                  chapterId: id,
+                  pageIndex: index,
+                  inputMs: variant.timing.inputMs,
+                  imageWorkMs: variant.timing.imageMs,
+                  cacheHit: variant.timing.cacheHit,
+                  width,
+                },
+              });
+            }
             if (
               variant.index !== index ||
               variant.pageId !== page.id ||
@@ -994,9 +1553,10 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
           width: variant.width,
           height: variant.height,
           url: `${SCHEME}://page/${id}/${index}-${variant.width}.png`,
+          budget: budget(),
         };
       } catch (error) {
-        return { ok: false, error: errorText(error) };
+        return failure(error);
       }
     },
     async release(id: unknown): Promise<Result> {
@@ -1005,11 +1565,28 @@ export function createCbzReader(window: BrowserWindow, runtimeDirectory: string)
       else await release(id);
       return { ok: true };
     },
+    async diagnostics(events: unknown): Promise<Result> {
+      if (!Array.isArray(events) || events.length > 128 || !events.every(isReaderMetricEvent))
+        return { ok: false, error: 'Invalid reader metric batch' };
+      if (!diagnosticLog) return { ok: true };
+      for (const event of events) diagnosticLog.record('renderer', event);
+      return diagnosticLog.flush();
+    },
     async dispose() {
       disposed = true;
+      scheduler.dispose();
       await Promise.allSettled([...catalogs.keys()].map(releaseCatalog));
       await Promise.allSettled([...sessions.keys()].map(release));
       await Promise.allSettled([...closing.values()]);
+      if (diagnosticLog) {
+        app.removeListener('gpu-info-update', gpuInfo);
+        diagnosticLog.record('native', {
+          kind: 'stop',
+          clockMs: performance.now(),
+          values: { ...budget(), memoryMetric: 'estimated-admission' },
+        });
+        await diagnosticLog.close();
+      }
       protocol.unhandle(SCHEME);
     },
   };

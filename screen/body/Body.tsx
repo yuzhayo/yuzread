@@ -15,6 +15,9 @@ import type {
   Chapter,
   Result,
   PageMetadata,
+  ReaderBudget,
+  ReaderWorkPriority,
+  ReaderMetricEvent,
 } from '../../ShellHost.js';
 import BodyReader, {
   componentId,
@@ -28,6 +31,52 @@ import type { ScreenOpenResult, ReaderState } from './reader/BodyReader.tsx';
 export const areaId = 'body';
 export const parentName = 'Body';
 const integer = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
+const count = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const metricEvent = (v: unknown): v is ReaderMetricEvent =>
+  isObject(v) &&
+  oneOf(v.kind, [
+    'image',
+    'attach',
+    'frame-gap',
+    'frame-summary',
+    'long-task',
+    'scroll-jump',
+    'motion',
+  ] as const) &&
+  typeof v.clockMs === 'number' &&
+  Number.isFinite(v.clockMs) &&
+  v.clockMs >= 0 &&
+  v.clockMs <= 1e12 &&
+  Object.keys(v).every((key) => ['kind', 'clockMs', 'values'].includes(key)) &&
+  isObject(v.values) &&
+  Object.keys(v.values).length <= 16 &&
+  Object.entries(v.values).every(
+    ([key, item]) =>
+      /^[a-zA-Z][a-zA-Z0-9]{0,31}$/.test(key) &&
+      (typeof item === 'boolean' ||
+        (typeof item === 'string' && item.length <= 128) ||
+        (typeof item === 'number' && Number.isFinite(item) && Math.abs(item) <= 1e12)),
+  );
+const budget = (v: unknown): v is ReaderBudget =>
+  isObject(v) &&
+  count(v.limitBytes) &&
+  count(v.residentBytes) &&
+  count(v.inFlightBytes) &&
+  v.limitBytes <= 4096 * 1048576 &&
+  v.residentBytes + v.inFlightBytes <= v.limitBytes &&
+  count(v.activeJobs) &&
+  v.activeJobs <= 1 &&
+  count(v.queuedJobs) &&
+  v.queuedJobs <= 64;
+const budgetField = (v: Record<string, unknown>) => v.budget === undefined || budget(v.budget);
+const priority = (v: unknown): v is ReaderWorkPriority | undefined =>
+  v === undefined || oneOf(v, ['demand', 'visible', 'background'] as const);
+const failure = (v: Record<string, unknown>) =>
+  v.ok === false &&
+  typeof v.error === 'string' &&
+  (v.code === undefined || v.code === 'deferred' || v.code === 'cancelled') &&
+  budgetField(v);
 const page = (v: unknown): v is PageMetadata =>
   isObject(v) &&
   typeof v.id === 'string' &&
@@ -60,12 +109,11 @@ const catalog = (v: unknown): v is ReaderCatalog =>
       isObject(entry) && typeof entry.id === 'string' && typeof entry.name === 'string',
   );
 const chapterResult = (v: unknown): v is ReaderChapterResult =>
-  isObject(v) &&
-  ((v.ok === false && typeof v.error === 'string') || (v.ok === true && chapter(v.chapter)));
+  isObject(v) && (failure(v) || (v.ok === true && chapter(v.chapter) && budgetField(v)));
 const openResult = (v: unknown): v is ReaderOpenResult => {
   if (!isObject(v)) return false;
-  if (v.ok === false) return typeof v.error === 'string';
-  if (v.ok !== true) return false;
+  if (v.ok === false) return failure(v);
+  if (v.ok !== true || !budgetField(v)) return false;
   if (v.canceled === true) return true;
   const value = v.chapter,
     list = v.catalog;
@@ -119,38 +167,41 @@ const createPorts = () => ({
         typeof v.maxDecodeWidth === 'number' &&
         typeof v.maxDecodedMB === 'number',
     ),
-    contract('native.reader.open.output.v3', openResult),
+    contract('native.reader.open.output.v4', openResult),
     { ok: false, error: 'Capability is unavailable' },
   ),
   chapterOpen: createRequest(
     contract(
-      'native.reader.chapter.input',
+      'native.reader.chapter.input.v2',
       (v: unknown): v is ReaderChapterRequest =>
         Array.isArray(v) &&
-        v.length === 3 &&
+        (v.length === 3 || v.length === 4) &&
         typeof v[0] === 'string' &&
         typeof v[1] === 'string' &&
-        options(v[2]),
+        options(v[2]) &&
+        priority(v[3]),
     ),
-    contract('native.reader.chapter.output', chapterResult),
+    contract('native.reader.chapter.output.v2', chapterResult),
     { ok: false, error: 'Capability is unavailable' },
   ),
   prepare: createRequest(
     contract(
-      'native.reader.prepare.input.v2',
+      'native.reader.prepare.input.v3',
       (v: unknown): v is ReaderPrepareRequest =>
         Array.isArray(v) &&
-        v.length === 3 &&
+        (v.length === 3 || v.length === 4) &&
         typeof v[0] === 'string' &&
         typeof v[1] === 'number' &&
-        typeof v[2] === 'number',
+        typeof v[2] === 'number' &&
+        priority(v[3]),
     ),
     contract(
-      'native.reader.prepare.output.v2',
+      'native.reader.prepare.output.v3',
       (v: unknown): v is ReaderPrepareResult =>
         isObject(v) &&
-        ((v.ok === false && typeof v.error === 'string') ||
+        (failure(v) ||
           (v.ok === true &&
+            budgetField(v) &&
             typeof v.url === 'string' &&
             typeof v.id === 'string' &&
             typeof v.pageId === 'string' &&
@@ -169,6 +220,15 @@ const createPorts = () => ({
     contract('native.result', result),
     { ok: false, error: 'Capability is unavailable' },
   ),
+  readerMetrics: createRequest(
+    contract(
+      'native.reader.metrics.input',
+      (v: unknown): v is ReaderMetricEvent[] =>
+        Array.isArray(v) && v.length <= 128 && v.every(metricEvent),
+    ),
+    contract('native.result', result),
+    { ok: false, error: 'Capability is unavailable' },
+  ),
 });
 type Ports = ReturnType<typeof createPorts>;
 const children = [
@@ -183,6 +243,7 @@ const children = [
       releaseChapter: ports.release.request,
       registerOpenRequest: ports.open.register,
       publishState: ports.readerState.publish,
+      submitReaderMetrics: ports.readerMetrics.request,
     }),
   ),
 ];

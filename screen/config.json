@@ -220,6 +220,7 @@
           "minZoom": 0.5,
           "maxZoom": 3,
           "zoomStep": 0.1,
+          "diagnostics": false,
           "scrollbar": {
             "width": 15,
             "radius": 8,
@@ -306,6 +307,10 @@
     {
       "from": { "area": "body", "port": "release" },
       "to": { "area": "native", "port": "release" }
+    },
+    {
+      "from": { "area": "body", "port": "readerMetrics" },
+      "to": { "area": "native", "port": "readerMetrics" }
     },
     {
       "from": { "area": "native", "port": "issues" },

@@ -584,6 +584,36 @@ const examples = [
     code: `import type {NativeHandlers} from './ShellHost.js'; const open: NativeHandlers['reader:chapter'] = async () => ({ok:true,chapter:{id:'id',name:'chapter',sourceRevision:'revision',pages:[],estimatedBytes:0}});`,
   },
   {
+    name: 'prepare-priority',
+    expected: [2345],
+    code: `${imports}\nhost.reader.prepare('id',0,800,'gpu');`,
+  },
+  {
+    name: 'chapter-priority',
+    expected: [2345],
+    code: `${imports}\nhost.reader.chapter('catalog','entry',{renderWidth:800,maxDecodeWidth:1600,maxDecodedMB:64},'unknown');`,
+  },
+  {
+    name: 'budget-shape',
+    expected: [2322],
+    code: `import type {ReaderBudget} from './ShellHost.js';const budget:ReaderBudget={limitBytes:'64',residentBytes:0,inFlightBytes:0,activeJobs:0,queuedJobs:0};`,
+  },
+  {
+    name: 'metric-kind',
+    expected: [2322],
+    code: `${imports}\nhost.reader.diagnostics([{kind:'gpu',clockMs:0,values:{}}]);`,
+  },
+  {
+    name: 'metric-values',
+    expected: [2322],
+    code: `import type {ReaderMetricEvent} from './ShellHost.js';const metric:ReaderMetricEvent={kind:'image',clockMs:0,values:{payload:{invalid:true}}};`,
+  },
+  {
+    name: 'metric-clock',
+    expected: [2322],
+    code: `import type {ReaderMetricEvent} from './ShellHost.js';const metric:ReaderMetricEvent={kind:'image',clockMs:'wrong',values:{}};`,
+  },
+  {
     name: 'feature-binding',
     expected: [2345],
     code: `${imports}\nimport BodyReader from './screen/body/reader/BodyReader.tsx'; import {bindChild,acceptCommonConfig} from './screen/shared/logic/AreaDiscovery.ts'; bindChild(BodyReader,acceptCommonConfig,{componentId:'test',fileName:'BodyReader.tsx'},()=>props.input);`,

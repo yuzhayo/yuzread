@@ -7,8 +7,27 @@ const preloadRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const preloadStrings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item: unknown) => typeof item === 'string');
+const preloadCount = (v: unknown): v is number =>
+  typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const preloadBudget = (v: unknown): v is import('../ShellHost.js').ReaderBudget =>
+  preloadRecord(v) &&
+  preloadCount(v.limitBytes) &&
+  preloadCount(v.residentBytes) &&
+  preloadCount(v.inFlightBytes) &&
+  v.limitBytes <= 4096 * 1048576 &&
+  v.residentBytes + v.inFlightBytes <= v.limitBytes &&
+  preloadCount(v.activeJobs) &&
+  v.activeJobs <= 1 &&
+  preloadCount(v.queuedJobs) &&
+  v.queuedJobs <= 64;
+const preloadBudgetField = (v: Record<string, unknown>) =>
+  v.budget === undefined || preloadBudget(v.budget);
 const preloadFailure = (value: unknown): value is import('../ShellHost.js').Failure =>
-  preloadRecord(value) && value.ok === false && typeof value.error === 'string';
+  preloadRecord(value) &&
+  value.ok === false &&
+  typeof value.error === 'string' &&
+  (value.code === undefined || value.code === 'deferred' || value.code === 'cancelled') &&
+  preloadBudgetField(value);
 const preloadResult = (value: unknown): value is import('../ShellHost.js').Result =>
   preloadFailure(value) || (preloadRecord(value) && value.ok === true);
 const preloadWindowState = (value: unknown): value is import('../ShellHost.js').WindowState =>
@@ -67,10 +86,13 @@ const preloadChapterResult = (
   value: unknown,
 ): value is import('../ShellHost.js').ReaderChapterResult =>
   preloadFailure(value) ||
-  (preloadRecord(value) && value.ok === true && preloadChapter(value.chapter));
+  (preloadRecord(value) &&
+    value.ok === true &&
+    preloadChapter(value.chapter) &&
+    preloadBudgetField(value));
 const preloadOpenResult = (value: unknown): value is import('../ShellHost.js').ReaderOpenResult => {
   if (preloadFailure(value)) return true;
-  if (!preloadRecord(value) || value.ok !== true) return false;
+  if (!preloadRecord(value) || value.ok !== true || !preloadBudgetField(value)) return false;
   if (value.canceled === true) return true;
   const chapter = value.chapter,
     catalog = value.catalog;
@@ -87,6 +109,7 @@ const preloadPrepareResult = (
   preloadFailure(value) ||
   (preloadRecord(value) &&
     value.ok === true &&
+    preloadBudgetField(value) &&
     typeof value.url === 'string' &&
     typeof value.id === 'string' &&
     typeof value.pageId === 'string' &&
@@ -134,11 +157,16 @@ const shellHost = {
   onSectionHover: (callback) => preloadSubscribe('shell:section-hover', callback, preloadStrings),
   reader: {
     open: (options) => preloadInvoke('reader:open', [options], preloadOpenResult),
-    chapter: (catalogId, entryId, options) =>
-      preloadInvoke('reader:chapter', [catalogId, entryId, options], preloadChapterResult),
-    prepare: (id, index, decodeWidth) =>
-      preloadInvoke('reader:prepare', [id, index, decodeWidth], preloadPrepareResult),
+    chapter: (catalogId, entryId, options, priority = 'background') =>
+      preloadInvoke(
+        'reader:chapter',
+        [catalogId, entryId, options, priority],
+        preloadChapterResult,
+      ),
+    prepare: (id, index, decodeWidth, priority = 'visible') =>
+      preloadInvoke('reader:prepare', [id, index, decodeWidth, priority], preloadPrepareResult),
     release: (id) => preloadInvoke('reader:release', [id], preloadResult),
+    diagnostics: (events) => preloadInvoke('reader:diagnostics', [events], preloadResult),
   },
 } satisfies import('../ShellHost.js').ShellHost;
 contextBridge.exposeInMainWorld('shellHost', shellHost);

@@ -44,6 +44,7 @@ const channels = [
   'reader:chapter',
   'reader:prepare',
   'reader:release',
+  'reader:diagnostics',
 ] as const satisfies readonly (keyof InvokeChannels)[];
 
 // LOGIC — emitted entry remains one level below the original application root.
@@ -90,7 +91,11 @@ else {
       log = currentLog;
       const currentWindow = createAppWindow(root, config.window);
       window = currentWindow;
-      const archive = createCbzReader(currentWindow, path.join(userData, 'reader-cache'));
+      const archive = createCbzReader(
+        currentWindow,
+        path.join(userData, 'reader-cache'),
+        screenConfig,
+      );
       reader = archive;
       const native = createNativeWindowActions(currentWindow, config.window);
       const sectionHover = createSectionHover(currentWindow, screenConfig.areas);
@@ -111,11 +116,16 @@ else {
         }),
         'shell:window-action': (operation: unknown) => native.activate(operation),
         'reader:open': (options: unknown) => archive.open(options),
-        'reader:chapter': (catalogId: unknown, entryId: unknown, options: unknown) =>
-          archive.chapter(catalogId, entryId, options),
-        'reader:prepare': (id: unknown, index: unknown, decodeWidth: unknown) =>
-          archive.prepare(id, index, decodeWidth),
+        'reader:chapter': (
+          catalogId: unknown,
+          entryId: unknown,
+          options: unknown,
+          priority?: unknown,
+        ) => archive.chapter(catalogId, entryId, options, priority),
+        'reader:prepare': (id: unknown, index: unknown, decodeWidth: unknown, priority?: unknown) =>
+          archive.prepare(id, index, decodeWidth, priority),
         'reader:release': (id: unknown) => archive.release(id),
+        'reader:diagnostics': (events: unknown) => archive.diagnostics(events),
         'shell:diagnostics': (records: unknown): Result | Promise<Result> => {
           if (!Array.isArray(records) || records.length > 200 || !records.every(diagnosticRecord))
             return { ok: false, error: 'Invalid diagnostic batch' };

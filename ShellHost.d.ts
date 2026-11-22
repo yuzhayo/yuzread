@@ -2,6 +2,22 @@
 export interface Failure {
   ok: false;
   error: string;
+  code?: 'deferred' | 'cancelled';
+  budget?: ReaderBudget;
+}
+export type ReaderWorkPriority = 'demand' | 'visible' | 'background';
+export interface ReaderBudget {
+  limitBytes: number;
+  residentBytes: number;
+  inFlightBytes: number;
+  activeJobs: number;
+  queuedJobs: number;
+}
+export type ReaderMetricValue = string | number | boolean;
+export interface ReaderMetricEvent {
+  kind: 'image' | 'attach' | 'frame-gap' | 'frame-summary' | 'long-task' | 'scroll-jump' | 'motion';
+  clockMs: number;
+  values: Record<string, ReaderMetricValue>;
 }
 export type Result = { ok: true } | Failure;
 export interface WindowState {
@@ -40,10 +56,22 @@ export interface ReaderOpenOptions {
   maxDecodedMB: number;
 }
 export type ReaderOpenResult =
-  { ok: true; canceled: true } | { ok: true; chapter: Chapter; catalog: ReaderCatalog } | Failure;
-export type ReaderChapterRequest = [catalogId: string, entryId: string, options: ReaderOpenOptions];
-export type ReaderChapterResult = { ok: true; chapter: Chapter } | Failure;
-export type ReaderPrepareRequest = [id: string, index: number, decodeWidth: number];
+  | { ok: true; canceled: true }
+  | { ok: true; chapter: Chapter; catalog: ReaderCatalog; budget?: ReaderBudget }
+  | Failure;
+export type ReaderChapterRequest = [
+  catalogId: string,
+  entryId: string,
+  options: ReaderOpenOptions,
+  priority?: ReaderWorkPriority,
+];
+export type ReaderChapterResult = { ok: true; chapter: Chapter; budget?: ReaderBudget } | Failure;
+export type ReaderPrepareRequest = [
+  id: string,
+  index: number,
+  decodeWidth: number,
+  priority?: ReaderWorkPriority,
+];
 export interface ReaderPreparedPage {
   ok: true;
   id: string;
@@ -54,6 +82,7 @@ export interface ReaderPreparedPage {
   width: number;
   height: number;
   url: string;
+  budget?: ReaderBudget;
 }
 export type ReaderPrepareResult = ReaderPreparedPage | Failure;
 export interface DiagnosticRecord {
@@ -91,6 +120,7 @@ export interface InvokeChannels {
   'reader:chapter': { args: ReaderChapterRequest; result: ReaderChapterResult };
   'reader:prepare': { args: ReaderPrepareRequest; result: ReaderPrepareResult };
   'reader:release': { args: [id: string]; result: Result };
+  'reader:diagnostics': { args: [events: ReaderMetricEvent[]]; result: Result };
 }
 export interface EventChannels {
   'shell:window-state': WindowState;
@@ -113,5 +143,6 @@ export interface ShellHost {
     chapter(...request: ReaderChapterRequest): Promise<ReaderChapterResult>;
     prepare(...request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;
     release(id: string): Promise<Result>;
+    diagnostics(events: ReaderMetricEvent[]): Promise<Result>;
   };
 }

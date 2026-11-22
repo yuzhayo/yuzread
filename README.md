@@ -154,8 +154,26 @@ preserve scrolling and allow on-demand reload when reading backward. There is no
 permanent previous slot. Visible short chapters are never dropped to force a count.
 Failed next/replacement leaves the readable chapter intact.
 
-Shared scheduling/aggregate memory limits and in-app diagnostics remain pending in
-`reader-plan.md`. GPU/presented-frame performance needs separate evidence.
+Phase 5 is complete: one priority queue lets visible/backward demand interrupt
+speculative next between pages. Still-needed preload resumes without decoding
+accepted pages again. A shared native memory budget covers resident/staged/retiring
+chapter estimates; insufficient space defers preload instead of stretching images
+or throwing away visible pages. These are admission estimates, not a process-RSS
+or GPU-VRAM guarantee. Decode remains Sharp/CPU, not a new GPU backend.
+
+Phase 6 is complete: development/troubleshooting diagnostics are **off by default**.
+To collect a trace, set the reader child's `diagnostics` to `true` in
+`screen/config.json`, then restart. The log is:
+
+```text
+%APPDATA%\Yuzread\reader-diagnostics.log
+```
+
+It records queue/image/attachment timing, main-process RSS, callback hitches and
+unexplained scroll movement. Batches/file size are bounded; idle sampling stops.
+Return the flag to `false` for normal reading. RAF cadence is not presented FPS,
+main-process RSS is not total app/VRAM usage, and real-book performance is not certified.
+No toolbar, GPU decoder or frame-limit change was added.
 
 ## Agent-owned machinery
 
@@ -187,8 +205,8 @@ do not use it as the routine static code check.
 Checks cannot certify all prose rules or all behavior. Review the few parent files
 for accidental business logic and use focused runtime evidence for changed behavior.
 
-Documentation is kept to three useful files: `README.md` for the feature map,
-`AGENTS.md` for current ownership/reasons, and `reader-plan.md` for unfinished reader
-features. Completed migration/restructure plans have been removed. The separate template snapshot at
+Documentation is kept to `README.md` for the feature map and `AGENTS.md` for current
+ownership/reasons/validation limits. Completed reader/migration/restructure plans
+have been removed. The separate template snapshot at
 `C:\Apps\Template\electron` is not updated automatically. Existing taskbar pins and
 Chrome profiles are never modified by this work.

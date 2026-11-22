@@ -41,11 +41,15 @@ fixed opening-time geometry/DPI, right overlay scrollbar and parent-mediated Ope
 Phase 3 zoom is complete: Ctrl+wheel coalesces steps per animation frame and Ctrl+0
 resets to exactly 100%. Pointer/center anchors account for the actual column origin
 and native scroll bounds. Phase 4 continuation, offscreen eviction and on-demand
-backward loading are complete. Aggregate scheduling/budgets remain phase 5 work.
+backward loading are complete. Phase 5 priority scheduling/shared admission is complete:
+one native operation at a time, demand preempts preload between pages, and budgets
+cover live/staged/retiring chapter estimates rather than one allowance per chapter.
 Phase 2 is complete:
 preparation requires explicit decode width and uses an authorized maximum, source/
-page identities, atomic verified variants and conservative per-session admission.
-`reader-plan.md` is the only active implementation plan. Stages 5–6 remain unfinished.
+page identities and atomic verified variants. Admission remains an estimate, not a
+process-RSS/GPU-VRAM guarantee. Phase 6 opt-in diagnostics is complete and disabled
+by default. All reader implementation stages are complete; the finished reader plan
+has been removed. Performance targets are not certified by callback measurements.
 
 Pinned foundation: TypeScript 6.0.3, React 19.3.1, MUI 9.5.0, Vite 8.3.8 and Electron
 45.3.0. The existing MUI declaration-only compatibility repair is retained.
@@ -116,8 +120,9 @@ The body owns the reader. Keep reader display, state, loading/preloading
 coordination and scrolling together in `screen/body/reader/BodyReader.tsx`, using
 named sections. Its native counterpart is `electron/reader/CbzArchive.cts`.
 Open shows the first 3–5 decoded pages, then silently finishes the whole chapter.
-Next prepares only after current completion and publishes fully accepted chapter
-pixels below it. Resident images stay available until safely offscreen, replacement
+Speculative next prepares after current completion and publishes fully accepted
+chapter pixels below it. Demand can instead publish accepted visible pages early,
+using fixed boxes for the remaining pages. Resident images stay available until safely offscreen, replacement
 or close. Slots reserve original aspect ratios; page insertion never shifts layout.
 Loaded chapters keep one opening-time display-size/DPI snapshot. Their column
 uses the widest accepted page, with uniform images and physical-pixel-rounded
@@ -147,11 +152,13 @@ Native archive extraction/resize runs in a worker in the same CbzArchive.cts own
 executing its compiled `electron-built/reader/CbzArchive.cjs` through `__filename`.
 Image bytes are served only through session/index tokens, never arbitrary paths.
 Preparation contract: Open supplies opening `renderWidth`, configured
-`maxDecodeWidth` and `maxDecodedMB`; prepare takes `(id, index, decodeWidth)`.
+`maxDecodeWidth` and `maxDecodedMB`; prepare takes `(id, index, decodeWidth, priority?)`.
 Replies identify the chapter/source/page, requested width and actual bitmap size.
-Parents forward preparation through version-2 contracts; Open output is version 3
-and includes the authorized catalog. The chapterOpen port forwards catalog/entry
-IDs and settings without adding reader policy.
+Parents forward preparation through version-3 contracts; Open output is version 4
+and includes the authorized catalog. Chapter input/output are version 2. Parents
+forward catalog/entry IDs, settings, optional priority and budget snapshots without
+adding reader scheduling policy. Legacy omitted priorities default to visible
+preparation/background chapter indexing; the reader sends explicit priorities.
 Cache identity combines session directory, file-stat revision, ZIP entry identity
 and actual width. Compact hashed filenames avoid Windows imaging path limits.
 Temporary PNGs are renamed into place only after encoding/integrity/source checks.
@@ -160,14 +167,14 @@ and closes it on completion/cancellation. Untracked, partial or corrupt files ar
 not accepted. Released generations cannot publish late tokens; equal concurrent
 variants coalesce. Reader identity/dimension checks and monotonic accepted widths
 prevent stale/equal/lower-quality work replacing accepted images.
-Admission reserves the current chapter's initial surfaces, retained variants and
-estimated input/decode workspace. It is conservative, not a process-RSS guarantee;
-combined resident-chapter scheduling/budgets still belong to stage 5. Do not add
+Admission reserves chapter surfaces, retained variants, worker estimates and
+granted input/decode workspace across the native reader service. It is not a
+process-RSS guarantee. Do not add
 resize-driven preparation or quality replacement as an implicit side effect.
 Library, drawer and auto-scroll are not implemented yet.
 Do not scatter reader behavior across technical-layer folders or copy Citadel.
 
-`reader-plan.md` is the one current adaptation plan. The operator approved zoom,
+The completed reader adaptation and its decisions are recorded here. The operator approved zoom,
 automatic same-folder next-CBZ continuation and the existing dark background.
 After phase 3 the operator selected current + next residency, not a permanent
 previous/current/next window. Only next is prepared speculatively; earlier chapters
@@ -209,7 +216,7 @@ missing/changed/corrupt entries fail without replacing readable current content.
 Chapter eviction retains catalog authorization for backward reload. Catalog release
 retires authorization before awaiting every resident/in-flight worker/open. Repeated
 worker releases share their closing promise. Neighbor metadata opens coalesce by
-entry/width and are bounded; this is not phase 5 aggregate decoded-memory scheduling.
+entry/width and are bounded; phase 5 extends this with shared priority/admission.
 
 Open pauses/advances the old neighbor generation while retaining readable current.
 Cancel resumes continuation after discarding stale candidates; successful replacement
@@ -230,9 +237,74 @@ Fresh focused evidence on 2026-11-22 (not a full suite/FPS/RSS benchmark):
 Some geometry/zoom/width-cache/Open-bar code is already present; inspect it before
 overwriting or treating it as a skeleton. Its presence is not fresh verification.
 Adopt Citadel's sizing/anchor/chapter-lifecycle concepts, not its code or all UI
-features. Update status in that plan as slices are actually implemented/checked.
-The plan records a correction: Citadel updates future render requests on resize
+features. Do not start another implementation plan for already completed slices.
+Retain the correction: Citadel updates future render requests on resize
 and deliberately keeps existing surfaces; it does not reload all visible pages.
+
+### Scheduling and shared admission — phase 5 complete
+
+The reader's PREPARATION section owns one page pump, not one busy loop per chapter.
+Jobs retain opening geometry, remaining page indices, accepted images and priority.
+At each accepted page boundary, demand wins over current completion and background
+next. Natural DOM order never follows decode priority: offset lookup can request a
+visible history tail page first without reordering page slots. Demand publishes
+the accepted visible range (plus nearby initial pages) before offscreen pages finish.
+Speculative next still publishes only after its chapter is fully accepted. A paused
+next reuses completed pages when still in the current + next window; obsolete or
+memory-displacing speculative candidates are released, not kept as a previous slot.
+
+`CbzArchive.cts` owns the single native scheduler for every catalog/worker. Header
+indexing and preparation enter its bounded priority/FIFO queue (64 waiting jobs,
+one active operation). Sharp remains CPU/libvips with concurrency 1/cache disabled;
+no GPU decoder, dependency upgrade or machine-wide thread-pool change was added.
+Duplicate effective variants and entry/width opens coalesce; higher-priority callers
+promote queued work instead of creating another decode. An active operation completes
+normally unless its owner is released. IPC rejection alone is not completion: keep
+the scheduler slot/grant until worker retirement/exit settles. An uncertain failed
+retirement faults the queue instead of starting another decoder. Stopped failed
+workers retain accepted cache/surface accounting until normal owner release.
+
+The native service shares `maxDecodedMB`, rather than summing one allowance for each
+chapter/catalog. An authorized new Open can raise the limit; it cannot shrink it
+under live reservations or an active grant. Estimates include 8 MiB per archive
+worker, 8 bytes per display/variant pixel (bitmap/texture allowance, including rounding),
+retained variants and an exclusive grant for the active input/decode operation.
+Header-only workers reserve their baseline; full chapter surfaces reserve on first
+preparation. Worker replies validate/account resident estimates, and each operation
+checks available shared space before buffers/decode/publication. Closing reservations
+remain held until the worker termination promise actually resolves.
+
+`ReaderBudget` replies expose the estimate/limit, active grant, active and queued job
+counts. The grant is an upper allowance, not sampled allocator use. V8/Electron/OS
+overhead, delayed GPU reclamation and presented frames are not certified by this
+ledger; do not call it an OS process-RSS or GPU-VRAM hard cap. Priority is the typed
+`demand | visible | background` contract. Runtime codecs validate optional budget and
+`deferred | cancelled` failure tags; budget deferral is retryable, not a corrupt source.
+
+Deferral keeps accepted visible pixels and reports through the existing non-blocking
+status overlay, with no automatic retry loop or downscale. Demand may discard unused
+staged next, then retire only completely offscreen roots to free space; immutable
+history geometry and latest logical/root anchors prevent jumps even with no retained
+root in the viewport. Visible/current pixels are never evicted individually to make
+room. Retry follows real reclamation or a newly exposed/promoted demand. Pending
+browser images are tracked separately from accepted images and have their sources
+cleared during release, so stale acceptance does not retain an unowned image.
+
+Open pauses the old pump, cancels queued native work and drops old speculative jobs;
+cancel resumes valid current work. Replacement/close retire jobs, pending images,
+catalogs and worker grants. Zoom is guarded by reading-context identity, allowing it
+to remain usable while an offscreen-budget handoff displays only history spacers.
+
+Fresh focused evidence (no full suite, RSS sampling or FPS benchmark):
+- `.runtime/reader-scheduling-1795352726710/result.json`: actual shared 64-MB admission
+  across catalogs, deferred next/readable current, safe budget handoff, tail-page
+  priority and cached-next resume, early visible publication and replacement cleanup.
+- `.runtime/reader-chapters-1795351831310/result.json`: phase-4 regression at 100%/125% DPI.
+- `.runtime/reader-zoom-1795352348201/result.json`: zoom/input/resize/cleanup regression.
+- `.runtime/reader-phase2-proof-1795352843716/result.json`: preparation/cache/source,
+  budget and release-race regression after the final retirement changes.
+- Four focused phase-5/schema tests, build and `npm run check:code` passed with
+  32 production files, 18 type fixtures and 19 boundary/ownership fixtures.
 
 Shared screen components belong in `screen/shared/components/` only when reused;
 generic non-UI mechanics belong in the sibling `screen/shared/logic/` directory.
@@ -241,6 +313,53 @@ business rules. Use `// UI`, `// LOGIC` and descriptive subsection comments wher
 applicable. No file-per-method or speculative framework scaffolding.
 
 ## Configuration and discovery
+
+### Reader diagnostics — phase 6 complete, development/troubleshooting only
+
+The reader child's `diagnostics` boolean is explicitly false in `screen/config.json`;
+restart after changing it. When false, no reader diagnostic log, PerformanceObserver,
+diagnostic timers or ordinary-scroll RAF sampler is created. Reader/OS/GPU behavior
+does not change. Existing initialPages=5 and maxDecodedMB=1536 are retained.
+
+The BodyReader DIAGNOSTICS section owns activity-limited callback sampling, long-task
+observation, image/attach timing and scroll-continuity attribution. Samples stop after
+350 ms of quiet and on hidden/blur/cleanup; no React state or drawing runs per sample.
+A callback gap >=25 ms is a hitch, not proof of a dropped/presented GPU frame. Long
+tasks use the browser's >=50-ms API. Displacement >=2 px outside a 750-ms known-input/
+layout window is an unexplained-jump heuristic. Open/zoom/layout/resize and user input
+are tagged; overlapping gestures or external mutations are not perfectly attributable.
+Pending batches are bounded and sent about once per second through the readerMetrics
+parent port, not the generic shell/config diagnostics sink. Cleanup cancels listeners,
+observers and callbacks; the final renderer batch is best effort on window shutdown.
+
+CbzArchive owns native timing and the bounded append-only `reader-diagnostics.log` in
+the app's userData directory. It distinguishes scheduler queue/work time, ZIP input
+time and Sharp decode/resize/encode work from browser image decode and DOM attachment.
+Native enablement independently requires literal true in enabled reader config.
+Invalid metric envelopes/primitives are rejected; no caller-selected log path or raw
+filesystem capability is exposed. Native log buffers are bounded at 256 records and
+the existing file is capped at 4 MiB with a cap marker; it is not automatically deleted.
+Filesystem failure returns a diagnostic error and never breaks reading.
+
+Environment records include display frequency, runtime/backend and GPU feature status
+after gpu-info-update where observed. The measured process RSS is explicitly labeled
+main-process-only (including native workers), not total Electron/renderer/GPU memory.
+ReaderBudget remains an estimate. RAF summaries are callback cadence, never advertised
+as presented FPS; GPU feature enablement is not performance proof. No GPU decoder or
+frame-limit override was added, and performance targets/real-book behavior remain
+unverified by the fixture self-proof.
+
+Fresh focused evidence: `.runtime/reader-diagnostics-1795356485004/result.json` passed:
+disabled log/observer/RAF inactivity, native/renderer timing, a controlled hitch/long
+task and 37-px unexplained jump, no false jump for known actions, unchanged pixels/
+geometry and idle/pagehide cleanup. The display reported 165 Hz; this is not a 165-FPS
+presentation claim. The proof accepts `--archive <real.cbz>` for a caller-supplied
+read-only follow-up. Four phase-6/schema tests, build and final `check:code` passed
+with 32 production files, 21 type fixtures and 19 ownership/boundary fixtures.
+`.runtime/reader-scheduling-1795356602542/result.json` passed the phase-5 regression
+with diagnostics disabled after the final instrumentation changes.
+The reload proof waits for initial native loading/show to finish before reloading;
+otherwise a test-created ERR_ABORTED can trigger an app startup-error dialog.
 
 ### Hierarchy, placement and naming contract
 
@@ -345,7 +464,7 @@ row. Native scrolling has no React frame loop. Preserve current JSON placement.
 ## Scope and completion
 
 The completed TypeScript/modular foundation is retained. Follow the ownership
-rules in this file and preserve reader behavior and pending reader-plan statuses.
+rules in this file and preserve completed reader behavior and documented limits.
 Strict checking must cover all production source, including preload, installer,
 worker and disabled blocks. Do not hide errors with suppressions, `any`, false
 module declarations, unchecked casts, compiler exclusions or weakened contracts.
