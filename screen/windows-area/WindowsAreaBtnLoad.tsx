@@ -3,15 +3,18 @@ import { errorText, isObject } from '@logic/VisualConfig.ts';
 import type { ChildProps, ConfigReport } from '@logic/AreaDiscovery.ts';
 import type { ResolvedConfig } from '@logic/ConfigValidation.ts';
 import type { ActionSource, DiagnosticIssue } from '@logic/Diagnostics.ts';
-import type { Failure } from '../../ShellHost.js';
+import type { Failure, ReaderPickerSettings } from '../../ShellHost.js';
 
 // CONFIG AND CONTRACT — leaf owns its label/busy behavior and Open intent.
 export const componentId = 'reader.open';
-export const configKeys = ['replaceLabel', 'icons'];
+export const configKeys = ['replaceLabel', 'icons', 'folderPath', 'rememberFolder'];
 export interface WindowsAreaLoadConfig extends ResolvedConfig {
   replaceLabel: string;
   icons: { open: string; busy: string };
+  folderPath?: string;
+  rememberFolder?: boolean;
 }
+export type OpenIntent = ActionSource & { picker?: ReaderPickerSettings };
 export interface ReaderInfo {
   readonly phase: '' | 'scanning' | 'preparing';
   readonly total: number;
@@ -23,7 +26,7 @@ export type OpenOutcome =
   | undefined;
 export interface WindowsAreaLoadInput {
   reader: ReaderInfo;
-  requestOpen(source: ActionSource): Promise<OpenOutcome>;
+  requestOpen(source: OpenIntent): Promise<OpenOutcome>;
   report(issue: DiagnosticIssue): void;
 }
 export function validateConfig(
@@ -37,6 +40,19 @@ export function validateConfig(
   };
   if (typeof config.replaceLabel !== 'string' || !config.replaceLabel.trim())
     reject('replaceLabel', 'nonempty label', config.replaceLabel);
+  if (
+    config.folderPath !== undefined &&
+    (typeof config.folderPath !== 'string' ||
+      config.folderPath.length > 4096 ||
+      config.folderPath.includes('\0'))
+  )
+    reject(
+      'folderPath',
+      'folder path string, or empty to use the remembered folder',
+      config.folderPath,
+    );
+  if (config.rememberFolder !== undefined && typeof config.rememberFolder !== 'boolean')
+    reject('rememberFolder', 'boolean, default true', config.rememberFolder);
   if (
     !isObject(config.icons) ||
     typeof config.icons.open !== 'string' ||
@@ -62,6 +78,10 @@ export default function WindowsAreaBtnLoad({
         parentId: config.parentId,
         filePath: config.filePath,
         configPath: config.configPath,
+        picker: {
+          folderPath: config.folderPath?.trim() ?? '',
+          rememberFolder: config.rememberFolder !== false,
+        },
       });
       if (result && !result.ok)
         input.report({

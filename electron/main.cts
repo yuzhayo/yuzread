@@ -45,6 +45,7 @@ const channels = [
   'reader:prepare',
   'reader:release',
   'reader:diagnostics',
+  'reader:render-reserve',
 ] as const satisfies readonly (keyof InvokeChannels)[];
 
 // LOGIC — emitted entry remains one level below the original application root.
@@ -126,6 +127,8 @@ else {
           archive.prepare(id, index, decodeWidth, priority),
         'reader:release': (id: unknown) => archive.release(id),
         'reader:diagnostics': (events: unknown) => archive.diagnostics(events),
+        'reader:render-reserve': (owner: unknown, bytes: unknown, limit: unknown) =>
+          archive.reserveRender(owner, bytes, limit),
         'shell:diagnostics': (records: unknown): Result | Promise<Result> => {
           if (!Array.isArray(records) || records.length > 200 || !records.every(diagnosticRecord))
             return { ok: false, error: 'Invalid diagnostic batch' };

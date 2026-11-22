@@ -20,6 +20,7 @@ import type {
   Result,
   ReaderMetricEvent,
   ReaderMetricValue,
+  ReaderPickerSettings,
 } from '../../ShellHost.js';
 import { errorText, isRecord } from '../WindowConfig.cjs';
 
@@ -577,6 +578,14 @@ const supportedPage = /\.(png|jpe?g|webp|gif|avif|tiff?)$/i;
 const natural = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 export const compareChapterNames = (a: string, b: string): number =>
   natural.compare(a, b) || (a < b ? -1 : a > b ? 1 : 0);
+const pickerOptions = (value: unknown): value is ReaderPickerSettings =>
+  isRecord(value) &&
+  (value.folderPath === undefined ||
+    (typeof value.folderPath === 'string' &&
+      value.folderPath.length <= 4096 &&
+      !value.folderPath.includes('\0'))) &&
+  (value.rememberFolder === undefined || typeof value.rememberFolder === 'boolean') &&
+  Object.keys(value).every((key) => ['folderPath', 'rememberFolder'].includes(key));
 const openOptions = (value: unknown): value is ReaderOpenOptions =>
   isRecord(value) &&
   positive(value.renderWidth) &&
@@ -586,8 +595,9 @@ const openOptions = (value: unknown): value is ReaderOpenOptions =>
   positive(value.maxDecodedMB) &&
   value.maxDecodedMB >= 64 &&
   value.maxDecodedMB <= 4096 &&
+  (value.picker === undefined || pickerOptions(value.picker)) &&
   Object.keys(value).every((key) =>
-    ['renderWidth', 'maxDecodeWidth', 'maxDecodedMB'].includes(key),
+    ['renderWidth', 'maxDecodeWidth', 'maxDecodedMB', 'picker'].includes(key),
   );
 const ordered = (a: IndexedEntry, b: IndexedEntry) =>
   natural.compare(a.fileName, b.fileName) ||
@@ -923,11 +933,38 @@ export function createCbzReader(
   const diagnosticLog = diagnostics
     ? createReaderDiagnosticLog(path.join(path.dirname(runtimeDirectory), 'reader-diagnostics.log'))
     : null;
+  // LOAD PICKER — native persistence only; the Load child supplies the selection policy.
+  const folderFile = path.join(path.dirname(runtimeDirectory), 'load-folder.json');
+  const directory = async (value: unknown): Promise<string | undefined> => {
+    if (
+      typeof value !== 'string' ||
+      !value.trim() ||
+      value.length > 4096 ||
+      !path.isAbsolute(value)
+    )
+      return undefined;
+    return await fs
+      .stat(value)
+      .then((stat) => (stat.isDirectory() ? value : undefined))
+      .catch(() => undefined);
+  };
+  const loadFolder = async (picker?: ReaderPickerSettings): Promise<string | undefined> => {
+    const configured = await directory(picker?.folderPath);
+    if (configured) return configured;
+    if (picker?.rememberFolder === false) return undefined;
+    try {
+      const saved: unknown = JSON.parse(await fs.readFile(folderFile, 'utf8'));
+      return isRecord(saved) ? directory(saved.folder) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
   const sessions = new Map<string, ArchiveSession>(),
     catalogs = new Map<string, ArchiveCatalog>(),
     closing = new Map<string, Promise<void>>(),
     stopping = new Map<string, Promise<number>>(),
-    reservations = new Map<string, number>();
+    reservations = new Map<string, number>(),
+    renderReservations = new Map<string, number>();
   const scheduler = createReaderScheduler(
     MAX_PENDING,
     diagnosticLog
@@ -943,7 +980,11 @@ export function createCbzReader(
   let budgetLimit = 64 * MB;
   let gpuObserved = false;
   let grant: { owner: string; limitBytes: number } | null = null;
-  const totalResident = () => [...reservations.values()].reduce((sum, bytes) => sum + bytes, 0);
+  const totalResident = () =>
+    [...reservations.values(), ...renderReservations.values()].reduce(
+      (sum, bytes) => sum + bytes,
+      0,
+    );
   const budget = (): ReaderBudget => ({
     limitBytes: budgetLimit,
     residentBytes: totalResident(),
@@ -1093,6 +1134,8 @@ export function createCbzReader(
           'Content-Type': 'image/png',
           'Content-Length': String(variant.bytes),
           'Cache-Control': 'no-store',
+          // loadFile workers have an opaque origin; page tokens remain the authority.
+          'Access-Control-Allow-Origin': 'null',
         },
       });
       file = undefined;
@@ -1398,22 +1441,42 @@ export function createCbzReader(
       for (const key of sessions.keys()) scheduler.cancel(key);
       let authorized: ArchiveCatalog | undefined;
       try {
+        const defaultPath = await loadFolder(options.picker);
         const selection = await dialog.showOpenDialog(window, {
           title: 'Open CBZ',
           properties: ['openFile'],
           filters: [{ name: 'Comic book archive', extensions: ['cbz'] }],
+          ...(defaultPath ? { defaultPath } : {}),
         });
         const selected = selection.filePaths[0];
         if (selection.canceled || !selected) return { ok: true, canceled: true };
         if (disposed || window.isDestroyed()) throw new Error('Reader closed');
-        const { catalog, entry } = await authorize(selected, options);
+        // Picker settings never become archive/worker/catalog settings.
+        const preparation: ReaderOpenOptions = {
+          renderWidth: options.renderWidth,
+          maxDecodeWidth: options.maxDecodeWidth,
+          maxDecodedMB: options.maxDecodedMB,
+        };
+        const { catalog, entry } = await authorize(selected, preparation);
         authorized = catalog;
-        const result = await readChapter(catalog, entry, options, 'visible');
+        const result = await readChapter(catalog, entry, preparation, 'visible');
         if (!result.ok)
           throw result.code === 'deferred'
             ? new DeferredDecodeError(result.error)
             : new Error(result.error);
         assertCatalog(catalog);
+        if (options.picker?.rememberFolder !== false) {
+          try {
+            await fs.mkdir(path.dirname(folderFile), { recursive: true });
+            await fs.writeFile(
+              folderFile,
+              JSON.stringify({ folder: path.dirname(path.resolve(selected)) }),
+              'utf8',
+            );
+          } catch (error) {
+            console.warn(`Load folder could not be saved: ${errorText(error)}`);
+          }
+        }
         const publicCatalog: ReaderCatalog = {
           id: catalog.id,
           chapters: catalog.entries.map(({ id, name }) => ({ id, name })),
@@ -1563,6 +1626,39 @@ export function createCbzReader(
       if (typeof id !== 'string') return { ok: false, error: 'Invalid chapter identity' };
       if (catalogs.has(id)) await releaseCatalog(id);
       else await release(id);
+      return { ok: true };
+    },
+    async reserveRender(owner: unknown, bytes: unknown, maximumMB: unknown): Promise<Result> {
+      if (
+        typeof owner !== 'string' ||
+        !/^[0-9a-f-]{36}$/.test(owner) ||
+        typeof bytes !== 'number' ||
+        !Number.isSafeInteger(bytes) ||
+        bytes < 0 ||
+        bytes > 4096 * MB ||
+        typeof maximumMB !== 'number' ||
+        !Number.isInteger(maximumMB) ||
+        maximumMB < 64 ||
+        maximumMB > 4096
+      )
+        return { ok: false, error: 'Invalid render reservation' };
+      if (!bytes) {
+        renderReservations.delete(owner);
+        return { ok: true };
+      }
+      budgetLimit = Math.max(budgetLimit, maximumMB * MB);
+      const current = budget();
+      if (
+        current.residentBytes -
+          (renderReservations.get(owner) ?? 0) +
+          current.inFlightBytes +
+          bytes >
+        budgetLimit
+      )
+        return failure(
+          new DeferredDecodeError('Render preparation exceeds the shared reader budget'),
+        );
+      renderReservations.set(owner, bytes);
       return { ok: true };
     },
     async diagnostics(events: unknown): Promise<Result> {

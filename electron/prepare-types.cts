@@ -37,3 +37,26 @@ for (const repair of repairs)
     fs.writeFileSync(file, source.replace(repair.before, repair.after));
     console.log(`Repaired MUI declaration ${relative}; original: ${backup}`);
   }
+
+// Pixi 8.23.0 initializes distanceField to {type:'none',range:0}, never undefined.
+// Its indexed optional interface type incorrectly widens this class property.
+const pixi = path.join(root, 'node_modules', 'pixi.js');
+if (fs.existsSync(pixi)) {
+  const info: unknown = JSON.parse(fs.readFileSync(path.join(pixi, 'package.json'), 'utf8'));
+  if (!isRecord(info) || info.version !== '8.23.0')
+    throw new Error('Review Pixi declaration repair before changing pinned 8.23.0');
+  const relative = 'lib/scene/text-bitmap/AbstractBitmapFont.d.ts';
+  const file = path.join(pixi, relative),
+    source = fs.readFileSync(file, 'utf8');
+  const before = "readonly distanceField: BitmapFontData['distanceField'];";
+  const after = "readonly distanceField: NonNullable<BitmapFontData['distanceField']>;";
+  if (!source.includes(after)) {
+    if (source.split(before).length !== 2)
+      throw new Error('Unexpected Pixi bitmap-font declaration');
+    const backup = path.join(root, '.runtime', 'type-declaration-backup', 'pixi-8.23.0', relative);
+    fs.mkdirSync(path.dirname(backup), { recursive: true });
+    if (!fs.existsSync(backup)) fs.copyFileSync(file, backup);
+    fs.writeFileSync(file, source.replace(before, after));
+    console.log(`Repaired Pixi declaration ${relative}; original: ${backup}`);
+  }
+}

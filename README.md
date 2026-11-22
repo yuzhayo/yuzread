@@ -24,7 +24,11 @@ screen/
 ├── body/
 │   ├── Body.tsx                       Parent: mount/connect its reader
 │   └── reader/
-│       └── BodyReader.tsx             Own reader state, loading, zoom, UI and SCROLLBAR
+│       ├── BodyReader.tsx             Own reader state, loading, zoom, UI and SCROLLBAR
+│       ├── BodyReaderPixi.ts           Canvas/input/worker connection
+│       ├── BodyReaderPixiWorker.ts     GPU pages, texture queue and momentum
+│       ├── BodyReaderPixiWorkerContract.d.ts  Local worker messages
+│       └── BodyReaderPixiWorkerPolicy.ts    Pure momentum calculations
 │
 ├── action-bar/
 │   └── ActionBar.tsx                  Disabled empty area parent
@@ -112,6 +116,22 @@ rebuild after changing or adding modules. Native settings remain in
 `electron/config.json`, not duplicated in screen config.
 
 ## Current window and reader behavior
+### Load button folder
+
+The `readerOpen` child in `screen/config.json` supports:
+
+```json
+"folderPath": "",
+"rememberFolder": true
+```
+
+Empty `folderPath` remembers the last successfully opened CBZ folder across restarts.
+Set it to an existing folder such as `D:/Manga` to always start there; the configured
+folder takes priority. `rememberFolder: false` disables remembering. Invalid/missing
+folders fall back to the remembered folder or Electron's default. Cancel changes
+nothing. The small native preference file is `%APPDATA%\Yuzread\load-folder.json`.
+
+### Window and pages
 
 The window starts as the largest centered square inside the usable monitor area,
 excluding the taskbar. The square button returns to that geometry on the current
@@ -175,6 +195,35 @@ Return the flag to `false` for normal reading. RAF cadence is not presented FPS,
 main-process RSS is not total app/VRAM usage, and real-book performance is not certified.
 No toolbar, GPU decoder or frame-limit change was added.
 
+### Pixi GPU pages and momentum
+
+The reader now uses **PixiJS 8.23.0/WebGL2 in one OffscreenCanvas worker for every
+loaded page**, not a first-page preview. The current reader configuration is:
+
+```json
+"renderer": "pixi",
+"momentum": { "enabled": true, "speed": 1 }
+```
+
+Normal wheel ticks ramp into motion, coast and settle. Ctrl+wheel/Ctrl+0 keep their
+zoom behavior and interrupt old momentum. Keyboard/scrollbar positioning, blur,
+hidden state, picker and close also stop it. Fine pixel input is left native using
+a small-delta heuristic to avoid adding a second device-inertia tail; it is not a
+guaranteed mouse/touchpad classifier. There is no idle animation loop or 60-FPS cap.
+
+Accepted images live as worker bitmaps/textures; DOM elements only reserve geometry
+and page names, not duplicate image pixels. The canvas is viewport-sized and only
+visible pages are drawn. Large pages use bounded padded tiles; upload/retirement and
+extra render/staging estimates participate in the same native budget. Original
+decode/cache, fixed geometry and current + next policies remain. `renderer: "dom"`
+is the explicit compatibility choice, not a concurrent second rendering path.
+
+Three focused schema/momentum tests, strict checks, builds and a two-chapter GPU
+integration check passed, including non-first-page pixels, momentum chapter handoff,
+backward reload, zoom interruption, resize and cleanup. **Presented FPS has not been
+measured.** `reader-plan.md` retains remaining validation/performance work; no full
+suite or lengthy benchmark was run.
+
 ## Agent-owned machinery
 
 `electron/` handles native execution; `tests/` handles verification. You normally
@@ -206,7 +255,8 @@ Checks cannot certify all prose rules or all behavior. Review the few parent fil
 for accidental business logic and use focused runtime evidence for changed behavior.
 
 Documentation is kept to `README.md` for the feature map and `AGENTS.md` for current
-ownership/reasons/validation limits. Completed reader/migration/restructure plans
-have been removed. The separate template snapshot at
+ownership/reasons/validation limits, with `reader-plan.md` holding the active Pixi
+migration only. Completed reader/migration/restructure plans have been removed.
+The separate template snapshot at
 `C:\Apps\Template\electron` is not updated automatically. Existing taskbar pins and
 Chrome profiles are never modified by this work.

@@ -19,9 +19,11 @@ import type {
   ReaderWorkPriority,
   ReaderMetricEvent,
   ReaderMetricValue,
+  ReaderPickerSettings,
 } from '../../../ShellHost.js';
 import type { ConfigReport, ChildProps } from '@logic/AreaDiscovery.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
+import { attachReaderPixi, ReaderSurfaceError } from './BodyReaderPixi.ts';
 import type { ResolvedConfig, ResolvedPart } from '@logic/ConfigValidation.ts';
 import type { ActionSource } from '@logic/Diagnostics.ts';
 export type ReaderPhase = '' | 'scanning' | 'preparing';
@@ -34,14 +36,18 @@ export type ScreenOpenResult =
   | { ok: true; chapter: { id: string; pages: number } }
   | Failure
   | undefined;
+export type ReaderOpenIntent = ActionSource & { picker?: ReaderPickerSettings };
 export interface BodyReaderInput {
   openArchive(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
   openChapter(request: ReaderChapterRequest): Promise<ReaderChapterResult>;
   preparePage(request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;
   releaseChapter(id: string): Promise<Result>;
-  registerOpenRequest(handler: (source: ActionSource) => Promise<ScreenOpenResult>): () => void;
+  registerOpenRequest(handler: (source: ReaderOpenIntent) => Promise<ScreenOpenResult>): () => void;
   publishState(state: ReaderState): void;
   submitReaderMetrics(events: ReaderMetricEvent[]): Promise<Result>;
+  reserveRender(
+    request: import('../../../ShellHost.js').ReaderRenderReserveRequest,
+  ): Promise<Result>;
 }
 
 // CONFIG AND CONTRACT — one body-owned block, not separate discovered page controls.
@@ -69,6 +75,8 @@ export interface ReaderConfig extends ResolvedConfig {
   maxZoom: number;
   zoomStep: number;
   diagnostics?: boolean;
+  renderer?: 'dom' | 'pixi';
+  momentum?: { enabled: boolean; speed: number };
   scrollbar: ScrollbarSettings;
   labels: Record<(typeof labelKeys)[number], string>;
   parts: Record<(typeof partKeys)[number], ResolvedPart>;
@@ -84,6 +92,7 @@ interface ReaderChapter extends Chapter {
   index: number;
   root: HTMLDivElement;
   complete: boolean;
+  preparedPages: Map<number, ReaderPreparedPage>;
 }
 interface ChapterRecord {
   index: number;
@@ -201,6 +210,8 @@ export const configKeys = [
   'zoomStep',
   'labels',
   'diagnostics',
+  'renderer',
+  'momentum',
   'scrollbar',
 ];
 export function validateConfig(
@@ -233,6 +244,16 @@ export function validateConfig(
   if (!finite(config.zoomStep, 0.05, 1)) reject('zoomStep', '0.05–1 zoom step', config.zoomStep);
   if (config.diagnostics !== undefined && typeof config.diagnostics !== 'boolean')
     reject('diagnostics', 'boolean opt-in, default false', config.diagnostics);
+  if (config.renderer !== undefined && config.renderer !== 'dom' && config.renderer !== 'pixi')
+    reject('renderer', 'dom or pixi', config.renderer);
+  if (
+    config.momentum !== undefined &&
+    (!isObject(config.momentum) ||
+      typeof config.momentum.enabled !== 'boolean' ||
+      !finite(config.momentum.speed, 0.1, 5) ||
+      Object.keys(config.momentum).some((key) => !['enabled', 'speed'].includes(key)))
+  )
+    reject('momentum', 'enabled boolean and speed 0.1–5', config.momentum);
   if (
     !isNamedRecord(
       config.labels,
@@ -768,6 +789,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   const [zoom, setZoom] = useState(1);
   const zoomValue = useRef(1),
     cancelZoom = useRef<(() => void) | null>(null);
+  const surface = useRef<ReturnType<typeof attachReaderPixi> | null>(null);
   const host = useMemo(
     () => ({
       open: input.openArchive,
@@ -786,21 +808,29 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     chapter.images.clear();
     chapter.pendingImages.clear();
     chapter.acceptedWidths.clear();
-    return host
-      .release(chapter.id)
-      .then(() => {})
-      .catch(() => {});
+    chapter.preparedPages.clear();
+    return (surface.current?.releaseChapter(chapter.id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() =>
+        host
+          .release(chapter.id)
+          .then(() => {})
+          .catch(() => {}),
+      );
   };
   const releaseReading = (session: ReaderSession | null) => {
     if (!session || !session.alive) return;
     session.alive = false;
     session.epoch++;
     session.observer.disconnect();
-    for (const job of session.jobs.values()) if (!job.mounted) void release(job.chapter);
+    const retiring: Promise<void>[] = [];
+    for (const job of session.jobs.values()) if (!job.mounted) retiring.push(release(job.chapter));
     session.jobs.clear();
-    for (const record of session.records.values()) release(record.chapter);
+    for (const record of session.records.values()) retiring.push(release(record.chapter));
     session.records.clear();
-    void host.release(session.catalog.id).catch(() => {});
+    void Promise.all(retiring)
+      .then(() => host.release(session.catalog.id))
+      .catch(() => {});
   };
   const prepare = async (
     chapter: ReaderChapter,
@@ -843,13 +873,23 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       objectFit: 'contain',
     });
     chapter.pendingImages.add(image);
-    image.src = response.url;
+    const gpu = config.renderer !== 'dom';
+    if (gpu) image.style.visibility = 'hidden';
+    else image.src = response.url;
     const imageStart = monitor ? performance.now() : 0;
     try {
-      await image.decode();
-    } catch {
+      if (gpu) {
+        if (!surface.current) throw new Error('GPU renderer is not mounted');
+        await surface.current.preparePage(response, priority);
+      } else await image.decode();
+    } catch (error) {
       image.removeAttribute('src');
       if (!chapter.alive || !alive.current) return null;
+      if (error instanceof ReaderSurfaceError && error.code === 'deferred')
+        throw new ReaderDeferredError(error.message);
+      if (error instanceof ReaderSurfaceError && error.code === 'cancelled')
+        throw new ReaderCancelledError(error.message);
+      if (gpu && error instanceof Error) throw error;
       throw new Error(`Cannot decode page: ${page.name}`);
     } finally {
       chapter.pendingImages.delete(image);
@@ -858,7 +898,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
           chapterId: chapter.id,
           pageIndex: page.index,
           nativeMs,
-          imageDecodeMs: performance.now() - imageStart,
+          ...(gpu
+            ? { rendererPrepareMs: performance.now() - imageStart }
+            : { imageDecodeMs: performance.now() - imageStart }),
           cancelled: !chapter.alive || !alive.current,
         });
     }
@@ -866,7 +908,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       image.removeAttribute('src');
       return null;
     }
-    if (image.naturalWidth !== response.width || image.naturalHeight !== response.height) {
+    if (
+      !gpu &&
+      (image.naturalWidth !== response.width || image.naturalHeight !== response.height)
+    ) {
       image.removeAttribute('src');
       throw new Error(`${page.name}: Prepared dimensions do not match decoded pixels`);
     }
@@ -877,6 +922,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     }
     chapter.acceptedWidths.set(page.index, response.width);
     chapter.images.set(page.index, image);
+    chapter.preparedPages.set(page.index, response);
     return image;
   };
 
@@ -1035,6 +1081,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       session.restoredTop = view.scrollTop;
     }
     for (const element of content.children) session.observer.observe(element);
+    surface.current?.syncLayout();
     if (metrics.current)
       metrics.current.record('attach', {
         durationMs: performance.now() - started,
@@ -1349,6 +1396,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
               ...response.chapter,
               alive: true,
               images: new Map(),
+              preparedPages: new Map(),
               pendingImages: new Set(),
               acceptedWidths: new Map(),
               slots: [],
@@ -1475,9 +1523,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     const available = viewport.current.clientWidth - config.pageInset;
     return Math.max(1, Math.floor(available * ratio));
   };
-  const openChapter = async (_source: ActionSource): Promise<ScreenOpenResult> => {
+  const openChapter = async (source: ReaderOpenIntent): Promise<ScreenOpenResult> => {
     if (opening.current) return { ok: false, error: 'Another Open operation is active' };
     opening.current = true;
+    surface.current?.stop();
     metrics.current?.expect('open');
     const previousReading = reading.current;
     if (previousReading) {
@@ -1502,6 +1551,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         renderWidth: decodeWidth,
         maxDecodeWidth: config.maxRenderWidth,
         maxDecodedMB: config.maxDecodedMB,
+        ...(source.picker ? { picker: source.picker } : {}),
       });
       if (!alive.current) {
         if (response.ok && 'chapter' in response)
@@ -1526,6 +1576,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         ...response.chapter,
         alive: true,
         images: new Map(),
+        preparedPages: new Map(),
         pendingImages: new Set(),
         acceptedWidths: new Map(),
         slots: [],
@@ -1571,6 +1622,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       renderReading(session, false);
       view.scrollTop = (index > 0 ? session.probeHeight : 0) * zoomValue.current;
       view.scrollLeft = 0;
+      surface.current?.stop();
+      surface.current?.syncLayout();
       session.lastTop = view.scrollTop;
       session.restoredTop = view.scrollTop;
       candidate.current = null;
@@ -1621,6 +1674,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       const next = normalizeZoom(value, config.minZoom, config.maxZoom, config.zoomStep);
       const old = zoomValue.current;
       if (next === old || !alive.current || !reading.current?.alive) return;
+      surface.current?.stop();
       metrics.current?.expect('zoom');
       // Measure immediately before mutation, not when input was queued. The strip's
       // real origin includes auto-margin centering, both scroll axes and vertical origin.
@@ -1724,6 +1778,49 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   useEffect(() => {
     return input.registerOpenRequest((source) => openChapter(source));
   }, [input.registerOpenRequest]);
+
+  // RENDER SURFACE — one worker for the reader lifetime, not one per page/chapter.
+  useEffect(() => {
+    const view = viewport.current;
+    if (!view) return undefined;
+    try {
+      const renderer = attachReaderPixi(view, {
+        gpu: config.renderer !== 'dom',
+        momentum: config.momentum?.enabled !== false,
+        speed: config.momentum?.speed ?? 1,
+        maxDecodedMB: config.maxDecodedMB,
+        getDocumentId: () => reading.current?.catalog.id ?? '',
+        getPages: () =>
+          [...(reading.current?.records.values() ?? [])].flatMap((record) => {
+            const chapter = record.chapter;
+            return chapter?.alive
+              ? [...chapter.preparedPages.values()].flatMap((page) => {
+                  const image = chapter.images.get(page.index);
+                  return image ? [{ image, page }] : [];
+                })
+              : [];
+          }),
+        canScroll: () =>
+          alive.current && reading.current?.alive === true && !reading.current.paused,
+        onMotion: () => metrics.current?.expect('momentum'),
+        reserve: (owner, bytes, limit) => input.reserveRender([owner, bytes, limit]),
+      });
+      surface.current = renderer;
+      return () => {
+        if (surface.current === renderer) surface.current = null;
+        void renderer.close();
+      };
+    } catch (error) {
+      console.error(`Renderer unavailable: ${errorText(error)}`);
+      return undefined;
+    }
+  }, [
+    config.renderer,
+    config.momentum?.enabled,
+    config.momentum?.speed,
+    config.maxDecodedMB,
+    input.reserveRender,
+  ]);
 
   // UI — native scroll container; all tuning/visible styling comes from JSON.
   const status = display.error

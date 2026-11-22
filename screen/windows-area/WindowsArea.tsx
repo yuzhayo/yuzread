@@ -4,14 +4,13 @@ import { acceptCommonConfig, bindArea, bindChild } from '@logic/AreaDiscovery.ts
 import type { AreaProps } from '@logic/AreaDiscovery.ts';
 import { contract, createRequest, createState } from '@logic/ParentConnections.ts';
 import { isObject, oneOf } from '@logic/VisualConfig.ts';
-import type { ActionSource } from '@logic/Diagnostics.ts';
 import type { WindowActionResult, WindowOperation, WindowState } from '../../ShellHost.js';
 import WindowsAreaBtnLoad, {
   componentId as loadId,
   configKeys as loadKeys,
   validateConfig as validateLoad,
 } from './WindowsAreaBtnLoad.tsx';
-import type { OpenOutcome, ReaderInfo } from './WindowsAreaBtnLoad.tsx';
+import type { OpenOutcome, ReaderInfo, OpenIntent } from './WindowsAreaBtnLoad.tsx';
 import WindowsAreaBtnClose, {
   componentId as closeId,
   configKeys as closeKeys,
@@ -29,7 +28,19 @@ export const areaId = 'windowsBar';
 export const parentName = 'WindowsArea';
 const createPorts = () => ({
   open: createRequest(
-    contract('ui.open.input', (v: unknown): v is ActionSource => isObject(v)),
+    contract(
+      'ui.open.input.v2',
+      (v: unknown): v is OpenIntent =>
+        isObject(v) &&
+        (v.picker === undefined ||
+          (isObject(v.picker) &&
+            (v.picker.folderPath === undefined ||
+              (typeof v.picker.folderPath === 'string' &&
+                v.picker.folderPath.length <= 4096 &&
+                !v.picker.folderPath.includes('\0'))) &&
+            (v.picker.rememberFolder === undefined ||
+              typeof v.picker.rememberFolder === 'boolean'))),
+    ),
     contract(
       'ui.open.output',
       (v: unknown): v is OpenOutcome =>

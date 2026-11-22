@@ -50,10 +50,15 @@ export interface ReaderCatalog {
   id: string;
   chapters: { id: string; name: string }[];
 }
+export interface ReaderPickerSettings {
+  folderPath?: string;
+  rememberFolder?: boolean;
+}
 export interface ReaderOpenOptions {
   renderWidth: number;
   maxDecodeWidth: number;
   maxDecodedMB: number;
+  picker?: ReaderPickerSettings;
 }
 export type ReaderOpenResult =
   | { ok: true; canceled: true }
@@ -85,6 +90,7 @@ export interface ReaderPreparedPage {
   budget?: ReaderBudget;
 }
 export type ReaderPrepareResult = ReaderPreparedPage | Failure;
+export type ReaderRenderReserveRequest = [owner: string, bytes: number, maxDecodedMB: number];
 export interface DiagnosticRecord {
   code: string;
   componentId: string;
@@ -121,6 +127,7 @@ export interface InvokeChannels {
   'reader:prepare': { args: ReaderPrepareRequest; result: ReaderPrepareResult };
   'reader:release': { args: [id: string]; result: Result };
   'reader:diagnostics': { args: [events: ReaderMetricEvent[]]; result: Result };
+  'reader:render-reserve': { args: ReaderRenderReserveRequest; result: Result };
 }
 export interface EventChannels {
   'shell:window-state': WindowState;
@@ -144,5 +151,6 @@ export interface ShellHost {
     prepare(...request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;
     release(id: string): Promise<Result>;
     diagnostics(events: ReaderMetricEvent[]): Promise<Result>;
+    reserveRender(...request: ReaderRenderReserveRequest): Promise<Result>;
   };
 }

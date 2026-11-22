@@ -6,6 +6,7 @@ export default defineConfig({
   root: fileURLToPath(new URL('./screen', import.meta.url)),
   base: './',
   plugins: [react()],
+  worker: { format: 'es' },
   resolve: {
     alias: {
       '@ui': fileURLToPath(new URL('./screen/shared/components', import.meta.url)),

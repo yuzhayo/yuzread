@@ -136,6 +136,8 @@
           "bounds": { "x": 85, "y": 8, "width": 4.5, "height": 84 },
           "preset": "captionButton",
           "replaceLabel": "Open another CBZ",
+          "folderPath": "D:\\[ MANGA ]\\Citadel",
+          "rememberFolder": true,
           "icons": { "open": "folderOpen", "busy": "hourglass" }
         },
         {
@@ -221,6 +223,8 @@
           "maxZoom": 3,
           "zoomStep": 0.1,
           "diagnostics": false,
+          "renderer": "pixi",
+          "momentum": { "enabled": true, "speed": 1 },
           "scrollbar": {
             "width": 15,
             "radius": 8,
@@ -311,6 +315,10 @@
     {
       "from": { "area": "body", "port": "readerMetrics" },
       "to": { "area": "native", "port": "readerMetrics" }
+    },
+    {
+      "from": { "area": "body", "port": "renderReserve" },
+      "to": { "area": "native", "port": "renderReserve" }
     },
     {
       "from": { "area": "native", "port": "issues" },

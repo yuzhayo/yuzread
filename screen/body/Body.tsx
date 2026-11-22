@@ -3,7 +3,6 @@ import { bindArea, bindChild } from '@logic/AreaDiscovery.ts';
 import type { AreaProps } from '@logic/AreaDiscovery.ts';
 import { contract, createRequest, createState } from '@logic/ParentConnections.ts';
 import { isObject, oneOf } from '@logic/VisualConfig.ts';
-import type { ActionSource } from '@logic/Diagnostics.ts';
 import type {
   ReaderOpenOptions,
   ReaderOpenResult,
@@ -25,7 +24,7 @@ import BodyReader, {
   partKeys,
   validateConfig,
 } from './reader/BodyReader.tsx';
-import type { ScreenOpenResult, ReaderState } from './reader/BodyReader.tsx';
+import type { ScreenOpenResult, ReaderState, ReaderOpenIntent } from './reader/BodyReader.tsx';
 
 // CONFIG AND CONTRACT — the parent validates connection shapes, not reader algorithms.
 export const areaId = 'body';
@@ -124,16 +123,28 @@ const openResult = (v: unknown): v is ReaderOpenResult => {
     list.chapters.some((entry) => entry.id === value.entryId)
   );
 };
+const picker = (v: unknown) =>
+  v === undefined ||
+  (isObject(v) &&
+    (v.folderPath === undefined ||
+      (typeof v.folderPath === 'string' &&
+        v.folderPath.length <= 4096 &&
+        !v.folderPath.includes('\0'))) &&
+    (v.rememberFolder === undefined || typeof v.rememberFolder === 'boolean'));
 const options = (v: unknown): v is ReaderOpenOptions =>
   isObject(v) &&
   typeof v.renderWidth === 'number' &&
   typeof v.maxDecodeWidth === 'number' &&
-  typeof v.maxDecodedMB === 'number';
+  typeof v.maxDecodedMB === 'number' &&
+  picker(v.picker);
 const result = (v: unknown): v is Result =>
   isObject(v) && (v.ok === true || (v.ok === false && typeof v.error === 'string'));
 const createPorts = () => ({
   open: createRequest(
-    contract('ui.open.input', (v: unknown): v is ActionSource => isObject(v)),
+    contract(
+      'ui.open.input.v2',
+      (v: unknown): v is ReaderOpenIntent => isObject(v) && picker(v.picker),
+    ),
     contract(
       'ui.open.output',
       (v: unknown): v is ScreenOpenResult =>
@@ -159,14 +170,7 @@ const createPorts = () => ({
     { phase: '', total: 0 },
   ),
   archiveOpen: createRequest(
-    contract(
-      'native.reader.open.input.v2',
-      (v: unknown): v is ReaderOpenOptions =>
-        isObject(v) &&
-        typeof v.renderWidth === 'number' &&
-        typeof v.maxDecodeWidth === 'number' &&
-        typeof v.maxDecodedMB === 'number',
-    ),
+    contract('native.reader.open.input.v3', options),
     contract('native.reader.open.output.v4', openResult),
     { ok: false, error: 'Capability is unavailable' },
   ),
@@ -229,6 +233,26 @@ const createPorts = () => ({
     contract('native.result', result),
     { ok: false, error: 'Capability is unavailable' },
   ),
+  renderReserve: createRequest(
+    contract(
+      'native.reader.render-reserve.input',
+      (v: unknown): v is import('../../ShellHost.js').ReaderRenderReserveRequest =>
+        Array.isArray(v) &&
+        v.length === 3 &&
+        typeof v[0] === 'string' &&
+        /^[0-9a-f-]{36}$/.test(v[0]) &&
+        typeof v[1] === 'number' &&
+        Number.isSafeInteger(v[1]) &&
+        v[1] >= 0 &&
+        v[1] <= 4294967296 &&
+        typeof v[2] === 'number' &&
+        Number.isInteger(v[2]) &&
+        v[2] >= 64 &&
+        v[2] <= 4096,
+    ),
+    contract('native.result', result),
+    { ok: false, error: 'Capability is unavailable' },
+  ),
 });
 type Ports = ReturnType<typeof createPorts>;
 const children = [
@@ -244,6 +268,7 @@ const children = [
       registerOpenRequest: ports.open.register,
       publishState: ports.readerState.publish,
       submitReaderMetrics: ports.readerMetrics.request,
+      reserveRender: ports.renderReserve.request,
     }),
   ),
 ];

@@ -35,7 +35,8 @@ another architecture/migration phase before continuing the reader.
   Show the operator the screen feature map first; omit native/test internals unless
   requested. Do not delete that machinery merely to simplify the visible tree.
 
-Current reader: same-folder CBZ continuation with current + next residency,
+Current reader: Pixi GPU page drawing and worker-owned wheel momentum, with
+same-folder CBZ continuation and current + next residency,
 first configured 3–5 decoded pages, sequential completion,
 fixed opening-time geometry/DPI, right overlay scrollbar and parent-mediated Open.
 Phase 3 zoom is complete: Ctrl+wheel coalesces steps per animation frame and Ctrl+0
@@ -48,8 +49,9 @@ Phase 2 is complete:
 preparation requires explicit decode width and uses an authorized maximum, source/
 page identities and atomic verified variants. Admission remains an estimate, not a
 process-RSS/GPU-VRAM guarantee. Phase 6 opt-in diagnostics is complete and disabled
-by default. All reader implementation stages are complete; the finished reader plan
-has been removed. Performance targets are not certified by callback measurements.
+by default. All six original reader implementation stages are complete; their
+finished plan was removed. The newly requested Pixi rendering migration is planned
+separately below. Performance targets are not certified by callback measurements.
 
 Pinned foundation: TypeScript 6.0.3, React 19.3.1, MUI 9.5.0, Vite 8.3.8 and Electron
 45.3.0. The existing MUI declaration-only compatibility repair is retained.
@@ -61,6 +63,96 @@ Documentation lifecycle: README is the operator feature map; AGENTS records curr
 ownership, reasons and working rules; the reader plan records unfinished work.
 Transfer lasting decisions/status from completed task plans here, then remove the
 completed standalone plans. Do not accumulate redundant planning Markdown files.
+
+### Pixi GPU reader migration — all-page rendering and momentum implemented
+
+The operator's goal is GPU-drawn scrolling with consistently paced 60+ presented FPS
+while decode/preload continues, not merely a JavaScript momentum effect. The current
+plan is `reader-plan.md`. The operator approved implementation, explicitly rejected
+excessive testing/engineering and rejected a first-page-only scrolling test. Every
+loaded page must participate in the actual reader. All-page GPU rendering and
+momentum are implemented; remaining acceptance/performance work stays in the plan.
+Do not steer this task
+back to native-only scrolling without investigating the requested Pixi route.
+
+The direction is pinned PixiJS 8.23.0, an OffscreenCanvas rendering worker,
+bounded texture upload and one worker-owned camera. Keep native Sharp decode/cache/
+priority policies and existing geometry/chapter behavior. Drawing/DOM-dependent
+position integration must be adapted; do not describe this as zero existing-code
+changes. The four proposed private BodyReader-prefixed files are justified by the
+worker runtime/contract/pure-policy boundary, not a general architectural restructure.
+The migration plan defines the scoped transition from the current native scroller;
+historical native/DOM descriptions below remain accurate for the current runtime.
+
+Historical M1 snapshot, superseded by the all-page path below: M1 installed Pixi and connected the first accepted image through BodyReaderPixi.ts,
+BodyReaderPixiWorker.ts and its local contract. `pixiPreview: false` is retained in
+reader JSON; true enables this first-page connection after restart. It is part of
+the real reader, not a separate demo or full Pixi cutover. The normal reader keeps
+its existing path. The preview uses one bounded ImageBitmap/texture, a viewport-sized
+WebGL canvas, coalesced draws and no running Pixi ticker/GC loop. Original pixels
+remain available for fallback. Full texture admission/tiling and worker-owned camera
+are later stages; do not claim this temporary duplicate preview is a complete budget
+or 60+ presented-FPS solution.
+
+Vite emits local ES worker assets. Existing strict screen types cover Pixi and worker
+declarations; worker DOM/UI access and untracked worker URLs have explicit checker
+guards. CSP adds worker-src self and connects only to yuzread-page; the authorized
+page protocol adds opaque-origin CORS. No startup, IPC, sandbox or native decode
+policy changed. Pixi 8.23.0 has one incorrect AbstractBitmapFont.distanceField type;
+prepare-types applies a backed-up, exact-version declaration correction matching
+the runtime's initialized non-null property, without weakening strict checking.
+
+M1 checks: check:code and both builds passed; one reader-pixi-smoke integration passed
+real token/worker bitmap/WebGL2 pixels, scroll, fixed resize geometry, GPU compositing
+enabled and pagehide cleanup. `.runtime/reader-pixi-m1-1795363046102/result.json` is
+the evidence. No full suite, backend benchmark, injected stall or FPS measurement
+was performed. Move on through useful implementation slices, not a new proof phase.
+
+Current implementation — 2026-11-23: reader JSON selects `renderer: "pixi"` and
+`momentum: { enabled: true, speed: 1 }`; the temporary pixiPreview key is removed.
+BodyReader keeps document/geometry/priority/residency policy and passes every
+validated prepared page into one persistent rendering worker. DOM image nodes are
+geometry/name placeholders without src in the Pixi path. There is no first-page
+limit or duplicate normal DOM-image pixel residency. Numeric page-box snapshots
+update on layout changes; existing chapter coordination still runs in the UI.
+
+The worker prepares PNG bitmaps, verifies dimensions, uploads bounded 1024-pixel
+tiles with sampling borders and draws visible pages. Render-worker/framebuffer,
+encoded/staging and tile-border estimates use the same native admission limit via
+the narrow renderReserve capability. Native chapter/catalog release waits for
+renderer release; active page preparation must settle before release acknowledgement.
+Disposal stops work, destroys owned resources and settles GL work before acknowledging.
+Timeouts do not recycle uncertain render reservations. These remain estimates,
+not measured process-RSS/VRAM caps.
+
+BodyReaderPixiWorkerPolicy owns the pure 12-ms response/250-ms friction/1.5-gain
+momentum math. The worker owns vertical movement; the existing scroller projects
+its position for scrollbars/chapter events. One outstanding position and one render
+feedback message bound UI backlog. Control revisions discard obsolete movement;
+layout rebases preserve motion, while zoom, direct inputs, picker, blur/hidden and
+close cancel it. Fine pixel deltas use a documented small-delta native-input
+heuristic, not a claimed device classifier. Draw/animation work stops when idle.
+No React per-frame state or artificial 60-FPS cap is introduced. Renderer preparation
+timings are not mislabeled as DOM image decode or presented FPS.
+
+Focused evidence: `.runtime/reader-pixi-1795366639173/result.json` passed six GPU pages
+across two fixture chapters, second-page pixels, momentum handoff, backward reload,
+zoom/reset interruption, fixed geometry/framebuffer resize and pagehide cleanup;
+GPU compositing reported enabled. Three focused schema/momentum tests and final
+check:code passed (36 production files, 21 type/22 boundary fixtures), and both builds
+passed. No full suite or presented-FPS benchmark was run. Low-budget extremes,
+GPU-loss recovery and extended real-book performance are not certified by this check.
+
+Worker load/CSP/CORS, GPU backend compatibility, strict source coverage, additional
+memory overhead, latest-camera anchors and visibility-safe retirement are explicit
+gates. Do not weaken sandbox/IPC/typing, double memory allowances, silently downscale
+pages, or count worker/ticker callbacks as presented FPS. Measure the requested GPU
+path before claiming the performance goal. Diagnostics stay off by default.
+
+Future owners are Downloader -> Library -> Reader, with standalone Library asking
+the independent Reader to open content. Those applications, chapter-control UI,
+auto-scroll/speed UI, drag/drop and Windows CBZ installation are not this migration.
+On completion, transfer lasting decisions/evidence here and remove the finished plan.
 
 The operator navigates by filenames and folder hierarchy. Name each file after
 its actual job. Organize by the thing that owns the behavior, not by technical
@@ -111,6 +203,27 @@ change branding. Stable App ID is `com.yuzread.desktop`; relaunch metadata must
 include this app's directory. The book/Y icon is native-only, never screen artwork.
 
 ## Screen and feature ownership
+
+### Load folder preference — 2026-11-23
+
+WindowsAreaBtnLoad owns optional folderPath/rememberFolder validation and Open
+intent. Reader JSON's readerOpen child defaults to folderPath="" and rememberFolder=true.
+A configured existing folder takes priority; otherwise the last opened folder is
+read from the native userData/load-folder.json. A successful native archive open
+saves its folder; cancellation leaves it unchanged, and rememberFolder=false disables
+reading/writing that memory. Invalid/missing directories fall back without breaking
+reading. Electron 43+ defaults dialogs to Downloads unless defaultPath is supplied.
+
+Parents only forward typed picker settings through ui.open.input.v2 and
+native.reader.open.input.v3. BodyReader forwards them with the existing Open request;
+CbzArchive performs native directory validation/dialog/persistence. Picker settings
+are stripped before archive/catalog/worker preparation. No paths are returned from
+native folder memory and no raw filesystem capability is exposed.
+
+Two focused Load tests, check:code and both builds passed. The scoped native/UI
+integration at `.runtime/load-folder-1795368669933/result.json` checked selected-folder
+save, read-from-disk, disabling memory, fixed-folder override and cancellation.
+No full reader suite or performance benchmark was run for this small feature.
 
 Screen presentation, UI state and interaction coordination belong in `screen/`.
 Window command requests live with `screen/windows-area/`; native execution lives
@@ -487,6 +600,9 @@ compatibility repair for Fade/Collapse easing inheritance. It preserves their
 declared prop types and all runtime files, backs up originals in `.runtime/`, and
 runs during setup/runtime preparation. Do not replace it with `skipLibCheck` or
 general-purpose dependency edits. Review it before changing the MUI version.
+It also corrects the pinned Pixi 8.23.0 bitmap-font declaration as recorded above;
+review that exact-version correction before upgrading Pixi. Runtime assets are never
+modified by declaration repair.
 
 After runtime changes, normally close only positively identified Yuzread instances,
 launch the updated app and leave it running. Never kill unrelated apps or modify

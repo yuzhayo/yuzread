@@ -167,6 +167,8 @@ const shellHost = {
       preloadInvoke('reader:prepare', [id, index, decodeWidth, priority], preloadPrepareResult),
     release: (id) => preloadInvoke('reader:release', [id], preloadResult),
     diagnostics: (events) => preloadInvoke('reader:diagnostics', [events], preloadResult),
+    reserveRender: (owner, bytes, limit) =>
+      preloadInvoke('reader:render-reserve', [owner, bytes, limit], preloadResult),
   },
 } satisfies import('../ShellHost.js').ShellHost;
 contextBridge.exposeInMainWorld('shellHost', shellHost);

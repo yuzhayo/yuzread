@@ -262,6 +262,12 @@ function inspect(source, options, emission = false) {
         target.startsWith('screen/'))
     )
       report(node, 'NATIVE_SCREEN_IMPORT', `Native cannot import ${specifier}`);
+    if (
+      browser &&
+      /Worker\.ts$/.test(file) &&
+      /^(react(?:-dom)?(?:\/|$)|@mui\/|@emotion\/)/.test(specifier)
+    )
+      report(node, 'WORKER_UI_IMPORT', 'Rendering workers cannot import UI frameworks');
     if ((browser || desktop) && target.startsWith('tests/'))
       report(node, 'PRODUCTION_TEST_IMPORT', 'Production cannot import test helpers');
     if (target === 'ShellHost.d.ts' && !typeOnly)
@@ -298,6 +304,18 @@ function inspect(source, options, emission = false) {
   // No text directives are read as instructions; the scanner above only classifies them.
   /** @param {ts.Node} node @param {ts.Node} [parent] */
   function visit(node, parent) {
+    if (
+      browser &&
+      /Worker\.ts$/.test(file) &&
+      ts.isIdentifier(node) &&
+      ['window', 'document', 'Image', 'HTMLElement', 'HTMLImageElement'].includes(node.text) &&
+      !(parent && ts.isPropertyAccessExpression(parent) && parent.name === node)
+    )
+      report(
+        node,
+        'WORKER_DOM_GLOBAL',
+        'Rendering workers use OffscreenCanvas/ImageBitmap, not window/DOM APIs',
+      );
     if (node.kind === ts.SyntaxKind.AnyKeyword)
       report(node, 'EXPLICIT_ANY', 'Use a real contract or narrow unknown');
     if (ts.isNonNullExpression(node))
@@ -365,6 +383,24 @@ function inspect(source, options, emission = false) {
           !clause?.name),
       );
       imported(node, node.moduleSpecifier.text, typeOnly);
+    }
+    if (
+      browser &&
+      ts.isNewExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'Worker'
+    ) {
+      const url = node.arguments?.[0];
+      if (
+        !url ||
+        !ts.isNewExpression(url) ||
+        !ts.isIdentifier(url.expression) ||
+        url.expression.text !== 'URL' ||
+        !url.arguments?.[0] ||
+        !ts.isStringLiteral(url.arguments[0])
+      )
+        report(node, 'WORKER_ENTRY', 'Worker source must use a statically checked local URL');
+      else imported(node, url.arguments[0].text, false);
     }
     if (
       ts.isExportDeclaration(node) &&
@@ -688,6 +724,21 @@ assert.deepEqual(
   'Production/dependency errors during checker proof',
 );
 const boundaryExamples = [
+  {
+    file: 'screen/body/reader/BodyReaderPixiWorker.ts',
+    code: 'document.createElement("canvas");',
+    rule: 'WORKER_DOM_GLOBAL',
+  },
+  {
+    file: 'screen/body/reader/BodyReaderPixiWorker.ts',
+    code: "import React from 'react';",
+    rule: 'WORKER_UI_IMPORT',
+  },
+  {
+    file: 'screen/body/reader/BodyReaderPixi.ts',
+    code: 'new Worker(getUntrackedUrl());',
+    rule: 'WORKER_ENTRY',
+  },
   {
     file: 'screen/check-fixture.ts',
     code: "import fs from 'node:fs';",
