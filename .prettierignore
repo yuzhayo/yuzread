@@ -1,0 +1,4 @@
+node_modules/
+electron-built/
+screen-built/
+.runtime/

@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "moduleDetection": "legacy",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node"],
+    "allowJs": false,
+    "rootDir": "electron",
+    "outDir": "electron-built",
+    "noEmitOnError": true
+  },
+  "include": ["electron/**/*.cts", "ShellHost.d.ts"]
+}

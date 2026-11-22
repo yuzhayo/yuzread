@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "react", "react-dom"],
+    "jsx": "react-jsx",
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "allowImportingTsExtensions": true,
+    "allowJs": false,
+    "noEmit": true,
+    "paths": { "@ui/*": ["./screen/shared/components/*"], "@logic/*": ["./screen/shared/logic/*"] }
+  },
+  "include": ["screen/**/*.ts", "screen/**/*.tsx", "ShellHost.d.ts"]
+}

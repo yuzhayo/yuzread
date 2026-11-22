@@ -1,0 +1,10 @@
+{
+  "title": "Yuzread",
+  "width": 900,
+  "height": 760,
+  "minWidth": 720,
+  "minHeight": 500,
+  "startup": "square",
+  "background": "#0f131a",
+  "icon": "electron/assets/app-icon.ico"
+}
