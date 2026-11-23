@@ -5,6 +5,10 @@ import MinimizeIcon from '@mui/icons-material/Remove';
 import MaximizeIcon from '@mui/icons-material/CropSquare';
 import RestoreIcon from '@mui/icons-material/FilterNone';
 import CloseIcon from '@mui/icons-material/Close';
+import SpeedIcon from '@mui/icons-material/Speed';
+import PreviousIcon from '@mui/icons-material/ChevronLeft';
+import NextIcon from '@mui/icons-material/ChevronRight';
+import ChapterListIcon from '@mui/icons-material/FormatListBulleted';
 import { configuredSx } from '../logic/Appearance.ts';
 import type { MouseEventHandler } from 'react';
 import type { Visual } from '../logic/VisualConfig.ts';
@@ -16,6 +20,10 @@ const icons = {
   close: CloseIcon,
   folderOpen: FolderOpenIcon,
   hourglass: HourglassTopIcon,
+  speed: SpeedIcon,
+  previous: PreviousIcon,
+  next: NextIcon,
+  chapters: ChapterListIcon,
 };
 export type ActionIcon = keyof typeof icons;
 export const hasActionIcon = (name: unknown): name is ActionIcon =>
@@ -26,6 +34,8 @@ export interface ActionButtonProps {
   label: string;
   onClick: MouseEventHandler<HTMLButtonElement>;
   disabled?: boolean;
+  expanded?: boolean;
+  controls?: string;
 }
 
 // UI — reusable MUI renderer; icons and every visual/state come from validated config.
@@ -35,6 +45,8 @@ export default function ActionButton({
   label,
   onClick,
   disabled,
+  expanded,
+  controls,
 }: ActionButtonProps) {
   if (!hasActionIcon(icon)) return null;
   const Icon = icons[icon];
@@ -43,6 +55,8 @@ export default function ActionButton({
     <IconButton
       aria-label={label}
       title={label}
+      aria-expanded={expanded}
+      aria-controls={controls}
       onClick={onClick}
       disabled={disabled}
       disableRipple

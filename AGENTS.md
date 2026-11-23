@@ -204,6 +204,77 @@ include this app's directory. The book/Y icon is native-only, never screen artwo
 
 ## Screen and feature ownership
 
+### Bottom chapter navigation — 2026-11-23
+
+BottomBar is enabled as a transparent, non-draggable 4%-high bottom overlay at y=96,
+zIndex=10 with a hover preset. Previous/List/Next belong to the single self-contained
+BottomBarChapterNavigation.tsx child; old BottomBarStatus stays disabled. The reader
+still fills the entire body. Popup UI, pointer drag, selection and validation belong
+to the child; styles/order/sizes/labels belong to its JSON. Portal/ClickAwayListener
+keep the popup alive when the strip hides, with outside-click/Escape dismissal.
+
+ReaderNavigationState/Request are neutral typed data. Body/BottomBar forward state
+and commands through Screen; there are no sibling implementation imports or new
+native pickers. BodyReader owns navigation, stale catalog checks, current selection,
+busy state and disabled endpoints. Cached chapters are reused. Unloaded targets
+use existing chapter/prepare priority APIs, immutable known geometry and the frozen
+natural-order catalog. A target must have its initial pages before committing;
+failures preserve readable content. Zoom/speed remain; old momentum is stopped.
+
+Manual targets retain focus when a short final chapter cannot align at the top;
+real scrolling resumes normal primary-chapter selection. A far jump starts a new
+rendering segment while retaining native catalog authorization and known geometry.
+Its separate sceneId retires old GPU scene pixels safely. Paused old jobs transfer
+ownership before header/bitmap completion; old resident retirement settles before
+new same-catalog neighbor preload to avoid reusing a closing native chapter worker.
+
+Hover presets are valid independently of native drag regions. The existing native
+geometry sampler now observes any enabled hover section, not only draggable ones;
+no separate footer polling/controller was added. Top control positions, the configured
+D:\[ MANGA ]\Citadel folder, native window and speed panel remain unchanged.
+
+Focused navigation/schema checks and both builds passed. UI evidence at
+`.runtime/chapter-navigation-1795374646174/result.json` covers natural 1/2/10 order,
+current highlight, hover/overlay/no gutter, drag/outside/Escape, actual destination
+pixels, resident/unloaded Previous/Next/list, boundary disables, no extra picker,
+preserved zoom/speed and one GPU canvas. Popup screenshot inspected. No full suite
+or FPS benchmark. Existing reader-plan.md contains the requested tasklist; do not
+create a redundant standalone completed plan.
+
+### Scroll-speed panel — 2026-11-23
+
+WindowsAreaBtnScrollSpeed.tsx owns the button/popup, validation, slider/numeric draft,
+clamp/step, Reset and pointer dragging. It uses existing MUI controls, Portal,
+ClickAwayListener, ActionButton and ConfiguredRow; no new dependency/native window.
+The readerScrollSpeed JSON child is at x=80.25%, left of Load. Existing Load/default/
+Close positions and the operator's D:\[ MANGA ]\Citadel folder remain unchanged.
+Defaults min=10/max=100/normal=10/step=1 map value/10 to 1×–10×, with 91 values.
+Applied values stay clamped/snapped; the numeric draft is not forcibly rewritten
+mid-typing. Enter/blur commits it. Outside click/Escape closes without resetting.
+
+WindowsArea/Body only forward setScrollSpeed requests and scrollSpeed state through
+the Screen connections. BodyReader owns live speed; the Pixi bridge sends a typed
+speed command, and the worker rescales existing velocity/target immediately without
+restarting, decoding or resetting position. Velocity caps/settling thresholds scale
+with the multiplier so 10× does not hit the old 1× cap. Precision input also honors
+the selected speed without adding another inertia tail. Reader navigation keys are
+scoped to its input area so slider keys do not cancel momentum.
+
+Hover areas now stay mounted behind a visibility wrapper; do not revert to
+unmount-on-pointer-exit, which destroys a child-owned popup. The transparent native
+drag area remains mounted, and portal panels are outside the hidden wrapper.
+Popup pointer capture moves only the panel and cleans up on close/unmount. Its
+geometry/order/colors/labels come from JSON; no screen-local palette or draggable
+library. Runtime speed is session state, not automatically written to JSON/storage.
+
+Three focused schema/value/scaled-momentum tests and check:code passed (37 production
+files, 21 type/22 boundary fixtures). Screen build and the interaction check at
+`.runtime/scroll-speed-1795371910355/result.json` passed hover survival, input/clamp,
+slider/reset, 100=10× during active momentum, renderer identity, native-window count,
+panel-only drag, outside-close retention and keyboard/Escape. Panel screenshot was
+inspected. No full suite or FPS benchmark was run. Normalize QA app roots without a
+trailing backslash before passing them to the Electron launcher on Windows.
+
 ### Load folder preference — 2026-11-23
 
 WindowsAreaBtnLoad owns optional folderPath/rememberFolder validation and Open
@@ -569,7 +640,8 @@ The title text and minimize button are hidden. Open CBZ occupies the old minimiz
 slot at x=85%; default-size and Close keep x=89.75% and x=94.5% respectively.
 Native app title/icon/taskbar metadata remain intact; empty space stays draggable.
 Read the actual strip size from screen config; do not overwrite operator edits.
-Action/bottom bars and inspection remain off in normal use. Open CBZ now belongs
+Action bar and inspection remain off; the requested bottom chapter overlay is on.
+Open CBZ belongs
 to the hover Windows area and requests the body-owned reader's public capability.
 Reader status is a non-layout-blocking body overlay, not a permanent Open/status
 row. Native scrolling has no React frame loop. Preserve current JSON placement.

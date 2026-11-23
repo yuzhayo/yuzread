@@ -22,11 +22,38 @@ import WindowsAreaBtnDefaultSize, {
   validateConfig as validateDefault,
 } from './WindowsAreaBtnDefaultSize.tsx';
 import WindowsAreaTitle, { componentId as titleId } from './WindowsAreaTitle.tsx';
+import WindowsAreaBtnScrollSpeed, {
+  componentId as speedId,
+  configKeys as speedKeys,
+  partKeys as speedParts,
+  validateConfig as validateSpeed,
+} from './WindowsAreaBtnScrollSpeed.tsx';
 
 // CONFIG AND CONTRACT — parent's contracts and direct child assembly, no button algorithms.
 export const areaId = 'windowsBar';
 export const parentName = 'WindowsArea';
 const createPorts = () => ({
+  setScrollSpeed: createRequest(
+    contract(
+      'ui.reader.speed.input',
+      (v: unknown): v is number =>
+        typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 10,
+    ),
+    contract(
+      'ui.reader.speed.output',
+      (v: unknown): v is import('../../ShellHost.js').Result =>
+        isObject(v) && (v.ok === true || (v.ok === false && typeof v.error === 'string')),
+    ),
+    { ok: false, error: 'Reader speed is unavailable' },
+  ),
+  scrollSpeed: createState(
+    contract(
+      'ui.reader.speed.state',
+      (v: unknown): v is number =>
+        typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 10,
+    ),
+    1,
+  ),
   open: createRequest(
     contract(
       'ui.open.input.v2',
@@ -97,6 +124,21 @@ const createPorts = () => ({
 type Ports = ReturnType<typeof createPorts>;
 const children = [
   bindChild(
+    WindowsAreaBtnScrollSpeed,
+    validateSpeed,
+    {
+      componentId: speedId,
+      fileName: 'WindowsAreaBtnScrollSpeed.tsx',
+      configKeys: speedKeys,
+      partKeys: speedParts,
+    },
+    (ports: Ports, report) => ({
+      speed: ports.scrollSpeed.getSnapshot(),
+      requestSpeed: ports.setScrollSpeed.request,
+      report,
+    }),
+  ),
+  bindChild(
     WindowsAreaBtnLoad,
     validateLoad,
     { componentId: loadId, fileName: 'WindowsAreaBtnLoad.tsx', configKeys: loadKeys },
@@ -137,6 +179,7 @@ export default function WindowsArea({ config, ports, report }: AreaProps<Ports>)
   useSyncExternalStore(ports.readerState.subscribe, ports.readerState.getSnapshot);
   useSyncExternalStore(ports.windowState.subscribe, ports.windowState.getSnapshot);
   useSyncExternalStore(ports.title.subscribe, ports.title.getSnapshot);
+  useSyncExternalStore(ports.scrollSpeed.subscribe, ports.scrollSpeed.getSnapshot);
   return <AreaChildren nodes={config.nodes} ports={ports} report={report} />;
 }
 export const bind = bindArea(WindowsArea, children, createPorts);

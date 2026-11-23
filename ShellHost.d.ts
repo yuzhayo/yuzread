@@ -50,6 +50,15 @@ export interface ReaderCatalog {
   id: string;
   chapters: { id: string; name: string }[];
 }
+export interface ReaderNavigationState {
+  catalogId: string;
+  currentId: string;
+  chapters: { id: string; name: string }[];
+  busy: boolean;
+}
+export type ReaderNavigationRequest =
+  | { catalogId: string; action: 'previous' | 'next' }
+  | { catalogId: string; action: 'select'; entryId: string };
 export interface ReaderPickerSettings {
   folderPath?: string;
   rememberFolder?: boolean;

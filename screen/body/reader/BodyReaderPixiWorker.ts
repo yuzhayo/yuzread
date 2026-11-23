@@ -75,7 +75,11 @@ function validInput(v: unknown): v is PixiInput {
   if (!record(v) || v.version !== 1) return false;
   switch (v.kind) {
     case 'init':
-      return (v.canvas === null || v.canvas instanceof OffscreenCanvas) && validView(v.view);
+      return (
+        (v.canvas === null || v.canvas instanceof OffscreenCanvas) &&
+        validView(v.view) &&
+        finite(v.speed, 0.1, 10)
+      );
     case 'layout':
       return (
         validView(v.view) &&
@@ -99,6 +103,8 @@ function validInput(v: unknown): v is PixiInput {
       return integer(v.control) && finite(v.y, 0) && finite(v.maxY, 0);
     case 'rebase':
       return integer(v.control) && finite(v.delta) && finite(v.maxY, 0);
+    case 'speed':
+      return integer(v.control) && finite(v.speed, 0.1, 10) && finite(v.maxY, 0);
     case 'ack':
       return integer(v.serial);
     case 'reservation':
@@ -219,6 +225,7 @@ let frame: number | null = null,
   outstanding = 0,
   positionDirty = false;
 let upload: (() => void) | null = null;
+let speed = 1;
 let renderOutstanding = 0;
 interface RenderSummary {
   revision: number;
@@ -245,7 +252,7 @@ function publishPosition() {
   if (outstanding || !positionDirty || disposed) return;
   positionDirty = false;
   outstanding = ++serial;
-  reply({ version: 1, kind: 'position', serial: outstanding, control, y, moving: moving() });
+  reply({ version: 1, kind: 'position', serial: outstanding, control, y, moving: moving(), speed });
 }
 function schedule() {
   if (frame !== null || disposed) return;
@@ -259,6 +266,7 @@ function tick(time: number) {
       velocity,
       target,
       lastTime === null ? 0 : (time - lastTime) / 1000,
+      speed,
     );
     const desired = y + next.distance;
     y = Math.max(0, Math.min(maxY, desired));
@@ -489,6 +497,7 @@ async function resizeRenderer(next: PixiView) {
 }
 async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   view = message.view;
+  speed = message.speed;
   y = view.y;
   maxY = view.maxY;
   control = view.control;
@@ -650,8 +659,15 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
     control = message.control;
     maxY = message.maxY;
     if (message.kind === 'wheel') {
-      target = clampMomentum(target + momentumImpulse(message.distance));
+      target = clampMomentum(target + momentumImpulse(message.distance, speed), speed);
       lastTime ??= performance.now();
+      schedule();
+    } else if (message.kind === 'speed') {
+      const factor = message.speed / speed;
+      speed = message.speed;
+      velocity = clampMomentum(velocity * factor, speed);
+      target = clampMomentum(target * factor, speed);
+      positionDirty = true;
       schedule();
     } else if (message.kind === 'stop') stop(message.y);
     else if (message.kind === 'rebase') {

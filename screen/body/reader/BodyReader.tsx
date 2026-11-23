@@ -20,6 +20,8 @@ import type {
   ReaderMetricEvent,
   ReaderMetricValue,
   ReaderPickerSettings,
+  ReaderNavigationRequest,
+  ReaderNavigationState,
 } from '../../../ShellHost.js';
 import type { ConfigReport, ChildProps } from '@logic/AreaDiscovery.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
@@ -44,6 +46,10 @@ export interface BodyReaderInput {
   releaseChapter(id: string): Promise<Result>;
   registerOpenRequest(handler: (source: ReaderOpenIntent) => Promise<ScreenOpenResult>): () => void;
   publishState(state: ReaderState): void;
+  registerScrollSpeed(handler: (speed: number) => Result): () => void;
+  publishScrollSpeed(speed: number): void;
+  registerNavigation(handler: (request: ReaderNavigationRequest) => Promise<Result>): () => void;
+  publishNavigation(state: ReaderNavigationState): void;
   submitReaderMetrics(events: ReaderMetricEvent[]): Promise<Result>;
   reserveRender(
     request: import('../../../ShellHost.js').ReaderRenderReserveRequest,
@@ -105,6 +111,8 @@ interface ChapterRecord {
   chapter?: ReaderChapter;
 }
 interface ReaderSession {
+  sceneId: string;
+  focusIndex?: number;
   catalog: ReaderCatalog;
   alive: boolean;
   paused: boolean;
@@ -124,6 +132,8 @@ interface ReaderSession {
   lastTop: number;
 }
 interface ChapterJob {
+  transferred: boolean;
+  headerTask?: Promise<ReaderChapterResult>;
   index: number;
   epoch: number;
   priority: ReaderWorkPriority;
@@ -199,6 +209,30 @@ export const acceptsCatalogChapter = (
   catalog.chapters.some((entry) => entry.id === entryId && entry.name === chapter.name) &&
   chapter.pages.length > 0 &&
   chapter.pages.every((page, index) => page.index === index);
+const storedChapterMatches = (record: ChapterRecord | undefined, chapter: Chapter) =>
+  !record ||
+  (record.sourceRevision === chapter.sourceRevision &&
+    record.pages.length === chapter.pages.length &&
+    record.pages.every((page, index) => {
+      const next = chapter.pages[index];
+      return (
+        next && page.id === next.id && page.width === next.width && page.height === next.height
+      );
+    }));
+export function chapterNavigationIndex(
+  chapters: readonly { id: string }[],
+  currentId: string,
+  request: ReaderNavigationRequest,
+): number {
+  const current = chapters.findIndex((entry) => entry.id === currentId);
+  const index =
+    request.action === 'select'
+      ? chapters.findIndex((entry) => entry.id === request.entryId)
+      : current < 0
+        ? -1
+        : current + (request.action === 'previous' ? -1 : 1);
+  return index >= 0 && index < chapters.length ? index : -1;
+}
 export const configKeys = [
   'initialPages',
   'maxDecodedMB',
@@ -250,10 +284,10 @@ export function validateConfig(
     config.momentum !== undefined &&
     (!isObject(config.momentum) ||
       typeof config.momentum.enabled !== 'boolean' ||
-      !finite(config.momentum.speed, 0.1, 5) ||
+      !finite(config.momentum.speed, 0.1, 10) ||
       Object.keys(config.momentum).some((key) => !['enabled', 'speed'].includes(key)))
   )
-    reject('momentum', 'enabled boolean and speed 0.1–5', config.momentum);
+    reject('momentum', 'enabled boolean and speed 0.1–10', config.momentum);
   if (
     !isNamedRecord(
       config.labels,
@@ -779,6 +813,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     candidateCatalog = useRef<string | null>(null),
     alive = useRef(true),
     opening = useRef(false);
+  const navigating = useRef(false),
+    navigationSignature = useRef('');
   const [display, setDisplay] = useState<ReaderDisplay>({
     name: '',
     count: 0,
@@ -790,6 +826,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   const zoomValue = useRef(1),
     cancelZoom = useRef<(() => void) | null>(null);
   const surface = useRef<ReturnType<typeof attachReaderPixi> | null>(null);
+  const scrollSpeed = useRef(config.momentum?.speed ?? 1);
   const host = useMemo(
     () => ({
       open: input.openArchive,
@@ -800,6 +837,20 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     }),
     [input.openArchive, input.openChapter, input.preparePage, input.releaseChapter],
   );
+  const syncNavigation = () => {
+    const session = reading.current;
+    const state: ReaderNavigationState = {
+      catalogId: session?.alive ? session.catalog.id : '',
+      currentId: session?.alive ? (current.current?.entryId ?? '') : '',
+      chapters: session?.alive ? session.catalog.chapters : [],
+      busy: opening.current || navigating.current,
+    };
+    const signature = `${state.catalogId}|${state.currentId}|${state.busy}`;
+    if (signature !== navigationSignature.current) {
+      navigationSignature.current = signature;
+      input.publishNavigation(state);
+    }
+  };
   const release = (chapter: ReaderChapter | null | undefined) => {
     if (!chapter || !chapter.alive) return Promise.resolve();
     chapter.alive = false;
@@ -818,8 +869,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
           .catch(() => {}),
       );
   };
-  const releaseReading = (session: ReaderSession | null) => {
-    if (!session || !session.alive) return;
+  const releaseReading = (session: ReaderSession | null, keepCatalog = false) => {
+    if (!session || !session.alive) return Promise.resolve();
     session.alive = false;
     session.epoch++;
     session.observer.disconnect();
@@ -828,8 +879,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     session.jobs.clear();
     for (const record of session.records.values()) retiring.push(release(record.chapter));
     session.records.clear();
-    void Promise.all(retiring)
-      .then(() => host.release(session.catalog.id))
+    return Promise.all(retiring)
+      .then(() => (keepCatalog ? undefined : host.release(session.catalog.id)))
+      .then(() => {})
       .catch(() => {});
   };
   const prepare = async (
@@ -1092,6 +1144,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     if (current.current === chapter) return;
     cancelZoom.current?.();
     current.current = chapter;
+    syncNavigation();
     setDisplay((value) => ({
       ...value,
       name: chapter.name,
@@ -1118,6 +1171,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   ): ChapterJob => {
     const ratio = Math.max(0.1, window.devicePixelRatio || 1);
     const job: ChapterJob = {
+      transferred: false,
       index,
       epoch: session.epoch,
       priority,
@@ -1239,7 +1293,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       return box && box.bottom > bounds.top + 0.5 && box.top < bottom - 0.5;
     });
     const primary =
-      visible[0]?.chapter ?? (current.current?.alive ? current.current : residents[0]?.chapter);
+      visible.find((record) => record.index === session.focusIndex)?.chapter ??
+      visible[0]?.chapter ??
+      (current.current?.alive ? current.current : residents[0]?.chapter);
     if (primary) {
       publishCurrent(primary);
       content.dataset.currentChapter = primary.entryId;
@@ -1372,11 +1428,12 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
           session.alive &&
           reading.current === session &&
           session.jobs.get(job.index) === job &&
+          !job.transferred &&
           (job.mounted || (!session.paused && session.epoch === job.epoch));
         try {
           if (!job.chapter) {
             job.operation = 'open';
-            const response = await host.chapter([
+            job.headerTask = host.chapter([
               session.catalog.id,
               entry.id,
               {
@@ -1386,6 +1443,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
               },
               job.priority,
             ]);
+            const response = await job.headerTask;
             if (!response.ok)
               throw response.code === 'deferred'
                 ? new ReaderDeferredError(response.error)
@@ -1411,18 +1469,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
             const previous = session.records.get(job.index);
             if (
               !acceptsCatalogChapter(session.catalog, entry.id, chapter) ||
-              (previous &&
-                (previous.sourceRevision !== chapter.sourceRevision ||
-                  previous.pages.length !== chapter.pages.length ||
-                  previous.pages.some((page, index) => {
-                    const next = chapter.pages[index];
-                    return (
-                      !next ||
-                      page.id !== next.id ||
-                      page.width !== next.width ||
-                      page.height !== next.height
-                    );
-                  })))
+              !storedChapterMatches(previous, chapter)
             )
               throw new Error(
                 'Stored chapter geometry/source identity changed; reopen the archive',
@@ -1503,7 +1550,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
           }
         } finally {
           job.operation = null;
-          if (!valid() && !job.mounted) void release(job.chapter);
+          if (!valid() && !job.mounted && !job.transferred) void release(job.chapter);
         }
       }
     } finally {
@@ -1524,8 +1571,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     return Math.max(1, Math.floor(available * ratio));
   };
   const openChapter = async (source: ReaderOpenIntent): Promise<ScreenOpenResult> => {
-    if (opening.current) return { ok: false, error: 'Another Open operation is active' };
+    if (opening.current || navigating.current)
+      return { ok: false, error: 'Another reader navigation is active' };
     opening.current = true;
+    syncNavigation();
     surface.current?.stop();
     metrics.current?.expect('open');
     const previousReading = reading.current;
@@ -1598,6 +1647,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       if (!view) throw new Error('Reader is not mounted');
       const record = buildChapter(staging);
       const session: ReaderSession = {
+        sceneId: crypto.randomUUID(),
         catalog: response.catalog,
         alive: true,
         paused: false,
@@ -1654,6 +1704,200 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         for (const job of previousReading.jobs.values()) job.blocked = false;
         reconcile(previousReading);
       }
+      syncNavigation();
+    }
+  };
+
+  // CHAPTER NAVIGATION — reuse resident pixels, otherwise stage an authorized entry.
+  const navigateChapter = async (request: ReaderNavigationRequest): Promise<Result> => {
+    const previous = reading.current,
+      view = viewport.current;
+    if (!previous?.alive || !view || !alive.current || request.catalogId !== previous.catalog.id)
+      return { ok: false, error: 'The chapter list belongs to a different reading context' };
+    if (opening.current || navigating.current)
+      return { ok: false, error: 'Reader navigation is busy' };
+    const index = chapterNavigationIndex(
+      previous.catalog.chapters,
+      current.current?.entryId ?? '',
+      request,
+    );
+    if (index < 0) return { ok: false, error: 'No chapter in that direction' };
+    const entry = previous.catalog.chapters[index];
+    if (!entry) return { ok: false, error: 'Chapter is unavailable' };
+    navigating.current = true;
+    syncNavigation();
+    surface.current?.stop();
+    cancelZoom.current?.();
+    metrics.current?.expect('chapter-jump');
+    previous.paused = true;
+    previous.epoch++;
+    setDisplay((value) => ({ ...value, phase: 'preparing', error: '' }));
+    let staging = previous.records.get(index)?.chapter,
+      owned = false;
+    const valid = () => alive.current && previous.alive && reading.current === previous;
+    try {
+      let adopted: ChapterJob | undefined;
+      const retiring: Promise<void>[] = [];
+      for (const [key, job] of previous.jobs) {
+        if (job.mounted) continue;
+        job.transferred = true;
+        previous.jobs.delete(key);
+        if (!staging && key === index) adopted = job;
+        else
+          retiring.push(
+            (async () => {
+              if (job.headerTask) await job.headerTask.catch(() => {});
+              await release(job.chapter);
+            })(),
+          );
+      }
+      await Promise.all(retiring);
+      if (!valid()) throw new ReaderCancelledError('Reader context changed');
+      if (adopted) {
+        if (adopted.headerTask) {
+          const response = await adopted.headerTask;
+          if (!response.ok) throw new Error(response.error);
+        }
+        staging = adopted.chapter;
+        owned = !!staging;
+      }
+      const remembered = previous.records.get(index);
+      const ratio = Math.max(0.1, window.devicePixelRatio || 1);
+      const geometry = staging?.geometry ??
+        remembered?.geometry ?? {
+          ratio,
+          maximumPixels: Math.min(config.maxRenderWidth, maximumPixels(ratio)),
+        };
+      if (!staging) {
+        const response = await host.chapter([
+          previous.catalog.id,
+          entry.id,
+          {
+            renderWidth: geometry.maximumPixels,
+            maxDecodeWidth: config.maxRenderWidth,
+            maxDecodedMB: config.maxDecodedMB,
+          },
+          'demand',
+        ]);
+        if (!response.ok) throw new Error(response.error);
+        staging = {
+          ...response.chapter,
+          alive: true,
+          images: new Map(),
+          preparedPages: new Map(),
+          pendingImages: new Set(),
+          acceptedWidths: new Map(),
+          slots: [],
+          decodeWidth: geometry.maximumPixels,
+          geometry,
+          index,
+          root: document.createElement('div'),
+          complete: false,
+        };
+        owned = true;
+      }
+      if (owned) candidate.current = staging;
+      if (
+        !valid() ||
+        !acceptsCatalogChapter(previous.catalog, entry.id, staging) ||
+        !storedChapterMatches(remembered, staging)
+      )
+        throw new Error('Stored chapter identity/geometry changed; reopen the archive');
+      const first = Math.min(config.initialPages, staging.pages.length);
+      for (let pageIndex = 0; pageIndex < first; pageIndex++) {
+        if (!valid()) throw new ReaderCancelledError('Reader context changed');
+        if (staging.images.has(pageIndex)) continue;
+        const page = staging.pages[pageIndex];
+        if (!page) throw new Error('Chapter page is unavailable');
+        const image = await prepare(staging, page, staging.decodeWidth, 'demand');
+        if (!image) throw new ReaderCancelledError('Chapter was released');
+        if (staging.root.isConnected) staging.slots[pageIndex]?.replaceChildren(image);
+      }
+      if (!valid() || !staging.alive) throw new ReaderCancelledError('Reader context changed');
+      staging.complete = staging.images.size === staging.pages.length;
+      let session = previous;
+      if (!staging.root.isConnected) {
+        const record = buildChapter(staging);
+        const records = new Map<number, ChapterRecord>();
+        for (const [key, record] of previous.records)
+          records.set(key, {
+            index: record.index,
+            entryId: record.entryId,
+            sourceRevision: record.sourceRevision,
+            pages: record.pages,
+            geometry: record.geometry,
+            width: record.width,
+            height: record.height,
+          });
+        records.set(index, record);
+        const next: ReaderSession = {
+          sceneId: crypto.randomUUID(),
+          catalog: previous.catalog,
+          alive: true,
+          paused: true,
+          epoch: 0,
+          records,
+          errors: new Map(),
+          first: index,
+          last: index,
+          width: Math.max(previous.width, record.width),
+          probeHeight: view.clientHeight,
+          jobs: new Map(),
+          pumping: false,
+          serial: 0,
+          notice: null,
+          restoredTop: null,
+          lastTop: 0,
+          observer: new IntersectionObserver(() => reconcile(next), { root: view }),
+          focusIndex: index,
+        };
+        session = next;
+        reading.current = next;
+        current.current = staging;
+        renderReading(next, false);
+        view.scrollTop = (index > 0 ? next.probeHeight : 0) * zoomValue.current;
+        candidate.current = null;
+        await releaseReading(previous, true);
+        if (!alive.current || reading.current !== session)
+          throw new ReaderCancelledError('Reader context changed');
+      } else {
+        session.focusIndex = index;
+        view.scrollTop +=
+          staging.root.getBoundingClientRect().top -
+          view.getBoundingClientRect().top -
+          view.clientTop;
+        current.current = staging;
+      }
+      session.focusIndex = index;
+      session.paused = false;
+      session.restoredTop = view.scrollTop;
+      session.lastTop = view.scrollTop;
+      surface.current?.stop();
+      surface.current?.syncLayout();
+      setDisplay({
+        name: staging.name,
+        count: staging.images.size,
+        total: staging.pages.length,
+        phase: '',
+        error: '',
+      });
+      if (!staging.complete && !session.jobs.has(index))
+        createJob(session, index, 'visible', staging);
+      reconcile(session);
+      return { ok: true };
+    } catch (error) {
+      if (owned) await release(staging);
+      if (alive.current) setDisplay((value) => ({ ...value, phase: '', error: errorText(error) }));
+      return { ok: false, error: errorText(error) };
+    } finally {
+      candidate.current = null;
+      navigating.current = false;
+      if (previous.alive && reading.current === previous) {
+        previous.paused = false;
+        for (const job of previous.jobs.values()) job.blocked = false;
+        reconcile(previous);
+      }
+      if (alive.current) syncNavigation();
     }
   };
 
@@ -1749,6 +1993,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         return;
       }
       session.restoredTop = null;
+      delete session.focusIndex;
       session.lastTop = view.scrollTop;
       reconcile(session);
     };
@@ -1778,6 +2023,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   useEffect(() => {
     return input.registerOpenRequest((source) => openChapter(source));
   }, [input.registerOpenRequest]);
+  useEffect(() => {
+    syncNavigation();
+    return input.registerNavigation(navigateChapter);
+  }, [input.registerNavigation, input.publishNavigation]);
 
   // RENDER SURFACE — one worker for the reader lifetime, not one per page/chapter.
   useEffect(() => {
@@ -1787,9 +2036,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       const renderer = attachReaderPixi(view, {
         gpu: config.renderer !== 'dom',
         momentum: config.momentum?.enabled !== false,
-        speed: config.momentum?.speed ?? 1,
+        speed: scrollSpeed.current,
         maxDecodedMB: config.maxDecodedMB,
-        getDocumentId: () => reading.current?.catalog.id ?? '',
+        getDocumentId: () => reading.current?.sceneId ?? '',
         getPages: () =>
           [...(reading.current?.records.values() ?? [])].flatMap((record) => {
             const chapter = record.chapter;
@@ -1823,6 +2072,16 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   ]);
 
   // UI — native scroll container; all tuning/visible styling comes from JSON.
+  useEffect(() => {
+    input.publishScrollSpeed(scrollSpeed.current);
+    return input.registerScrollSpeed((speed) => {
+      if (!finite(speed, 0.1, 10)) return { ok: false, error: 'Scroll speed must be 0.1–10×' };
+      scrollSpeed.current = speed;
+      surface.current?.setSpeed(speed);
+      input.publishScrollSpeed(speed);
+      return { ok: true };
+    });
+  }, [input.registerScrollSpeed, input.publishScrollSpeed]);
   const status = display.error
     ? `${config.labels.failed}: ${display.error}`
     : display.phase

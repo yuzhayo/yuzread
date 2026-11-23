@@ -12,7 +12,6 @@ interface HoverSection {
   id: string;
   bounds: HoverBounds;
   enabled: true;
-  draggable: true;
   hoverPreset: string;
 }
 const isId = (value: unknown): value is string =>
@@ -30,7 +29,7 @@ const validBounds = (value: unknown): value is HoverBounds =>
   value.x + value.width <= 100 &&
   value.y + value.height <= 100;
 
-// LOGIC — native caption regions don't deliver renderer pointer events.
+// LOGIC — one geometry-driven hover sampler for caption and non-draggable overlays.
 export function createSectionHover(window: BrowserWindow, sections: unknown) {
   const contents = window.webContents;
   let disposed = false;
@@ -39,7 +38,6 @@ export function createSectionHover(window: BrowserWindow, sections: unknown) {
     (section): section is HoverSection =>
       isRecord(section) &&
       section.enabled === true &&
-      section.draggable === true &&
       isId(section.id) &&
       typeof section.hoverPreset === 'string' &&
       validBounds(section.bounds),

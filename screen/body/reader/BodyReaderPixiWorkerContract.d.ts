@@ -23,7 +23,7 @@ export interface PixiPageTiming {
   uploadMs: number;
 }
 export type PixiInput =
-  | { version: 1; kind: 'init'; canvas: OffscreenCanvas | null; view: PixiView }
+  | { version: 1; kind: 'init'; canvas: OffscreenCanvas | null; view: PixiView; speed: number }
   | { version: 1; kind: 'layout'; view: PixiView; pages: PixiPageBox[] }
   | { version: 1; kind: 'view'; view: PixiView }
   | {
@@ -37,6 +37,7 @@ export type PixiInput =
   | { version: 1; kind: 'wheel'; control: number; distance: number; maxY: number }
   | { version: 1; kind: 'stop'; control: number; y: number; maxY: number }
   | { version: 1; kind: 'rebase'; control: number; delta: number; maxY: number }
+  | { version: 1; kind: 'speed'; control: number; speed: number; maxY: number }
   | { version: 1; kind: 'ack'; serial: number }
   | { version: 1; kind: 'reservation'; request: number; result: Result }
   | { version: 1; kind: 'dispose' };
@@ -52,7 +53,15 @@ export type PixiOutput =
   | { version: 1; kind: 'prepared'; request: number; result: Result; timing: PixiPageTiming }
   | { version: 1; kind: 'released'; request: number }
   | { version: 1; kind: 'reserve'; request: number; bytes: number }
-  | { version: 1; kind: 'position'; serial: number; control: number; y: number; moving: boolean }
+  | {
+      version: 1;
+      kind: 'position';
+      serial: number;
+      control: number;
+      y: number;
+      moving: boolean;
+      speed: number;
+    }
   | {
       version: 1;
       kind: 'rendered';

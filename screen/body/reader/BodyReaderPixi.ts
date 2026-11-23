@@ -77,7 +77,11 @@ function validOutput(v: unknown): v is PixiOutput {
         typeof v.y === 'number' &&
         Number.isFinite(v.y) &&
         v.y >= 0 &&
-        typeof v.moving === 'boolean'
+        typeof v.moving === 'boolean' &&
+        typeof v.speed === 'number' &&
+        Number.isFinite(v.speed) &&
+        v.speed >= 0.1 &&
+        v.speed <= 10
       );
     case 'failed':
       return typeof v.error === 'string';
@@ -104,6 +108,8 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     revision = 0,
     control = 0,
     requestId = 0;
+  let speed = options.speed;
+  view.dataset.scrollSpeed = String(speed);
   let baselineTop = view.scrollTop,
     documentId = '',
     layoutFrame: number | null = null;
@@ -219,7 +225,6 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     }
     const mode = event.deltaMode;
     if (
-      !options.momentum ||
       !initialized ||
       !options.canScroll() ||
       !event.cancelable ||
@@ -236,16 +241,23 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
         : mode === 1
           ? parseFloat(getComputedStyle(view).lineHeight) || 16
           : 1;
-    const distance = Math.max(-1e6, Math.min(1e6, event.deltaY * unit * options.speed));
+    const distance = Math.max(-1e6, Math.min(1e6, event.deltaY * unit * speed));
     // Fine pixel streams already carry device inertia; leave them native rather than adding a second coast.
     if (mode === 0 && Math.abs(event.deltaY) < 40) {
       stop();
+      if (speed !== 1) {
+        event.preventDefault();
+        event.stopPropagation();
+        options.onMotion();
+        view.scrollTop += distance;
+        scroll();
+      }
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     options.onMotion();
-    if (reduced.matches) {
+    if (reduced.matches || !options.momentum) {
       stop();
       view.scrollTop += distance;
       scroll();
@@ -260,6 +272,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     });
   }
   const key = (event: KeyboardEvent) => {
+    if (!(event.target instanceof Node) || !root.contains(event.target)) return;
     if (
       [
         'ArrowUp',
@@ -330,6 +343,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     } else if (message.kind === 'position') {
       post({ version: 1, kind: 'ack', serial: message.serial });
       if (message.control !== control) return;
+      view.dataset.workerSpeed = String(message.speed);
       if (!options.canScroll()) {
         if (message.moving) stop();
         return;
@@ -420,7 +434,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     positionCanvas();
   }
   post(
-    { version: 1, kind: 'init', canvas: offscreen, view: measure() },
+    { version: 1, kind: 'init', canvas: offscreen, view: measure(), speed },
     offscreen ? [offscreen] : [],
   );
   resize.observe(view);
@@ -443,6 +457,18 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
   reduced.addEventListener('change', stop);
   timer = window.setTimeout(() => fail(new Error('GPU worker initialization timed out')), 15000);
   return {
+    setSpeed(next: number) {
+      if (closed || !Number.isFinite(next) || next < 0.1 || next > 10 || next === speed) return;
+      speed = next;
+      view.dataset.scrollSpeed = String(next);
+      post({
+        version: 1,
+        kind: 'speed',
+        control: ++control,
+        speed,
+        maxY: Math.max(0, view.scrollHeight - view.clientHeight),
+      });
+    },
     stop,
     syncLayout,
     close,

@@ -17,6 +17,8 @@ import type {
   ReaderBudget,
   ReaderWorkPriority,
   ReaderMetricEvent,
+  ReaderNavigationState,
+  ReaderNavigationRequest,
 } from '../../ShellHost.js';
 import BodyReader, {
   componentId,
@@ -140,6 +142,53 @@ const options = (v: unknown): v is ReaderOpenOptions =>
 const result = (v: unknown): v is Result =>
   isObject(v) && (v.ok === true || (v.ok === false && typeof v.error === 'string'));
 const createPorts = () => ({
+  navigateChapter: createRequest(
+    contract(
+      'ui.reader.navigation.input',
+      (v: unknown): v is ReaderNavigationRequest =>
+        isObject(v) &&
+        typeof v.catalogId === 'string' &&
+        (v.action === 'previous' ||
+          v.action === 'next' ||
+          (v.action === 'select' && typeof v.entryId === 'string')),
+    ),
+    contract('ui.reader.navigation.output', result),
+    { ok: false, error: 'Reader navigation is unavailable' },
+  ),
+  navigation: createState(
+    contract(
+      'ui.reader.navigation.state',
+      (v: unknown): v is ReaderNavigationState =>
+        isObject(v) &&
+        typeof v.catalogId === 'string' &&
+        typeof v.currentId === 'string' &&
+        typeof v.busy === 'boolean' &&
+        Array.isArray(v.chapters) &&
+        v.chapters.length <= 10000 &&
+        v.chapters.every(
+          (entry: unknown) =>
+            isObject(entry) && typeof entry.id === 'string' && typeof entry.name === 'string',
+        ),
+    ),
+    { catalogId: '', currentId: '', chapters: [], busy: false },
+  ),
+  setScrollSpeed: createRequest(
+    contract(
+      'ui.reader.speed.input',
+      (v: unknown): v is number =>
+        typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 10,
+    ),
+    contract('ui.reader.speed.output', result),
+    { ok: false, error: 'Reader speed is unavailable' },
+  ),
+  scrollSpeed: createState(
+    contract(
+      'ui.reader.speed.state',
+      (v: unknown): v is number =>
+        typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 10,
+    ),
+    1,
+  ),
   open: createRequest(
     contract(
       'ui.open.input.v2',
@@ -269,6 +318,10 @@ const children = [
       publishState: ports.readerState.publish,
       submitReaderMetrics: ports.readerMetrics.request,
       reserveRender: ports.renderReserve.request,
+      registerScrollSpeed: ports.setScrollSpeed.register,
+      publishScrollSpeed: ports.scrollSpeed.publish,
+      registerNavigation: ports.navigateChapter.register,
+      publishNavigation: ports.navigation.publish,
     }),
   ),
 ];

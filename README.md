@@ -17,6 +17,7 @@ screen/
 ├── windows-area/
 │   ├── WindowsArea.tsx                Parent: child layout and forwarding
 │   ├── WindowsAreaBtnLoad.tsx         Own Load logic, validation and UI behavior
+│   ├── WindowsAreaBtnScrollSpeed.tsx  Own draggable speed panel and live controls
 │   ├── WindowsAreaBtnClose.tsx        Own Close logic, validation and UI behavior
 │   ├── WindowsAreaBtnDefaultSize.tsx  Own return-to-default logic and UI behavior
 │   └── WindowsAreaTitle.tsx           Retained disabled title child
@@ -33,8 +34,9 @@ screen/
 ├── action-bar/
 │   └── ActionBar.tsx                  Disabled empty area parent
 └── bottom-bar/
-    ├── BottomBar.tsx                  Disabled area parent
-    └── BottomBarStatus.tsx            Own status UI behavior
+    ├── BottomBar.tsx                  Hover navigation parent and forwarding
+    ├── BottomBarChapterNavigation.tsx Previous/List/Next and draggable chapter popup
+    └── BottomBarStatus.tsx            Retained disabled status child
 ```
 
 Children inherit their parent's filename prefix, not its implementation. A child
@@ -140,11 +142,48 @@ monitor, not full-width maximize. The native book/Y icon and app identity remain
 The body fills the window. Hover the transparent top strip to reveal:
 
 ```text
-[ empty draggable area ][ Open CBZ ][ Default 1:1 ][ Close ]
+[ empty draggable area ][ Scroll speed ][ Open CBZ ][ Default 1:1 ][ Close ]
 ```
 
 Title/minimize stay hidden; Open/default/Close retain x=85%, 89.75%, 94.5%. Leaving
 the strip hides its children without shifting the reader. Alt+F4 closes the app.
+
+### Bottom chapter navigation
+
+Hover the bottom 4% strip to reveal **Previous / Chapter List / Next**. It is an
+overlay, not a reserved footer; moving away hides the controls without shrinking
+the pages. Chapter List opens a draggable, scrollable popup above the strip, using
+the current reader's naturally ordered same-folder catalog and highlighting the
+current chapter. Selecting a chapter navigates there; outside click/Escape closes.
+The popup survives moving away from the bottom hover strip.
+
+Previous/Next disable at the catalog boundaries or while navigating. Loaded pages
+are reused; unloaded chapters use the existing authorized loader, with no new
+picker. Jumps stop momentum but retain zoom and scroll speed. The controls, row
+order, popup geometry and visuals belong to the chapterNavigation child in
+`screen/config.json`; logic/UI live in `bottom-bar/BottomBarChapterNavigation.tsx`.
+
+### Scroll Speed button
+
+Click the speed icon immediately left of Load to open a small in-app panel. Drag
+its title to move it; click outside or press Escape to close. Closing keeps the
+selected speed. Reset, slider and numeric input share one value and apply immediately,
+including to momentum already running. No page reload or worker restart occurs.
+
+The readerScrollSpeed child in `screen/config.json` owns its range and visuals:
+
+```json
+"min": 10,
+"max": 100,
+"normal": 10,
+"step": 1
+```
+
+Speed is **value / 10**: 10=1×, 50=5×, 100=10×. The default step gives 91 values
+at 0.1× increments. Numeric drafts can be typed naturally; applied speed is always
+clamped/snapped, and Enter/blur commits the displayed value. Reset uses normal.
+Changes last for this app session, not a new persisted preference. Popup sizing,
+part order, styling and labels remain in that child's JSON.
 
 `body/reader/BodyReader.tsx` owns chapters in named sections. The first configured
 3–5 pages decode before display; remaining pages prepare sequentially in the native

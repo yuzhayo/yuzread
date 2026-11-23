@@ -146,7 +146,15 @@ export default function AreaLayout({
             >
               {inspect && <LayoutInspector node={section} settings={inspect} />}
               <AreaBoundary id={section.id} diagnostics={diagnostics}>
-                {section.hoverPreset !== undefined && !revealed ? null : area.render()}
+                <Box
+                  className="fill"
+                  sx={{
+                    visibility:
+                      section.hoverPreset !== undefined && !revealed ? 'hidden' : 'visible',
+                  }}
+                >
+                  {area.render()}
+                </Box>
               </AreaBoundary>
             </Box>
           );

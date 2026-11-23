@@ -31,6 +31,30 @@ geometry/visibility/scrolling code that cannot remain unchanged.
 
 ## Current delivered slice — 2026-11-23
 
+### Completed tasklist — bottom chapter navigation
+
+- [x] Add typed navigation state/commands between Reader, Body and BottomBar.
+- [x] Implement resident chapter jumps and authorized on-demand chapter loading;
+  preserve zoom/speed, stop momentum and retain readable pixels until ready.
+- [x] Enable a bottom hover overlay without changing reader geometry or top controls.
+- [x] Add Previous / Chapter List / Next and a draggable, scrollable chapter popup;
+  highlight current, respect folder order and close on selection/outside/Escape.
+- [x] Run focused navigation/UI checks and normal static/build validation only.
+- [x] Update current documentation and relaunch Yuzread for operator testing.
+
+Focused evidence: `.runtime/chapter-navigation-1795374646174/result.json` passed
+hover/overlay geometry, natural list/current highlight, draggable popup/outside/Escape,
+resident/nonresident jumps, actual selected-chapter pixels, boundary buttons, one
+picker only and preserved zoom/speed. This is functional navigation evidence, not
+an FPS benchmark. No full suite was run.
+
+Follow-up operator request: the live Scroll Speed panel is now implemented in
+WindowsAreaBtnScrollSpeed.tsx. Its JSON range defaults to 10–100 with step 1 and
+Reset=10; value/10 maps to 1×–10×. It changes current worker momentum immediately,
+with no worker/page restart. The UI/drag/outside-close check and focused math/schema
+checks passed; this is not presented-FPS evidence. Remaining automatic-scroll,
+chapter-navigation, drag/drop and installer work is still separate.
+
 - Removed the first-page preview limit and pixiPreview option. Current configuration
   enables renderer=pixi and momentum enabled/speed=1 for operator testing.
 - Every prepared page is validated/decoded/uploaded by the worker; DOM nodes reserve

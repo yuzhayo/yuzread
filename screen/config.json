@@ -101,6 +101,44 @@
       "colors": { "background": "#161d27" },
       "geometry": { "paddingX": 1, "paddingY": 1 },
       "content": { "whiteSpace": "nowrap", "horizontalAlign": "center" }
+    },
+    "speedPanel": {
+      "preset": "base",
+      "colors": { "background": "#161d27", "border": "#45546a" },
+      "geometry": {
+        "radius": 8,
+        "borderWidth": 1,
+        "paddingX": 3,
+        "paddingY": 6,
+        "shadow": "0 8px 24px #0008"
+      }
+    },
+    "speedHeader": { "preset": "base", "typography": { "weight": 600 } },
+    "speedControl": {
+      "preset": "captionButton",
+      "colors": { "background": "#2a3545", "border": "#45546a" },
+      "geometry": { "borderWidth": 1, "paddingX": 3 }
+    },
+    "speedSlider": {
+      "preset": "base",
+      "colors": { "foreground": "#8eb8fb" },
+      "content": { "overflow": "visible" }
+    },
+    "speedValue": {
+      "preset": "base",
+      "colors": { "background": "#121923", "border": "#45546a" },
+      "geometry": { "radius": 5 }
+    },
+    "chapterItem": {
+      "preset": "captionButton",
+      "geometry": { "radius": 3, "paddingX": 3 },
+      "content": { "horizontalAlign": "flex-start" },
+      "states": {
+        "active": {
+          "colors": { "background": "#34445a", "foreground": "#ffffff" },
+          "typography": { "weight": 600 }
+        }
+      }
     }
   },
   "areas": [
@@ -117,6 +155,48 @@
       "preset": "base",
       "hoverPreset": "titleBar",
       "children": [
+        {
+          "id": "readerScrollSpeed",
+          "componentId": "reader.scrollSpeed",
+          "parentId": "windowsBar",
+          "label": "Scroll speed",
+          "enabled": true,
+          "bounds": { "x": 80.25, "y": 8, "width": 4.5, "height": 84 },
+          "preset": "captionButton",
+          "icon": "speed",
+          "min": 10,
+          "max": 100,
+          "normal": 10,
+          "step": 1,
+          "order": ["reset", "slider", "value"],
+          "gap": 3,
+          "popup": {
+            "width": 320,
+            "height": 100,
+            "offset": 8,
+            "gap": 8,
+            "headerHeight": 28,
+            "rowHeight": 38,
+            "zIndex": 20,
+            "thumbSize": 14,
+            "trackSize": 3
+          },
+          "labels": {
+            "title": "Scroll speed",
+            "reset": "Reset",
+            "slider": "Scroll speed",
+            "value": "Speed value",
+            "drag": "Drag scroll speed panel",
+            "unit": "×"
+          },
+          "parts": {
+            "panel": { "preset": "speedPanel", "size": { "width": 100, "height": 100 } },
+            "header": { "preset": "speedHeader", "size": { "width": 100, "height": 100 } },
+            "reset": { "preset": "speedControl", "size": { "width": 22, "height": 100 } },
+            "slider": { "preset": "speedSlider", "size": { "width": 46, "height": 100 } },
+            "value": { "preset": "speedValue", "size": { "width": 26, "height": 100 } }
+          }
+        },
         {
           "id": "appTitle",
           "componentId": "shell.title",
@@ -260,18 +340,57 @@
       "id": "bottomBar",
       "parentId": "window",
       "folder": "bottom-bar",
-      "label": "Status bar",
-      "enabled": false,
+      "label": "Chapter navigation",
+      "enabled": true,
       "draggable": false,
-      "bounds": { "x": 0, "y": 95, "width": 100, "height": 5 },
-      "preset": "bottomBar",
+      "overlay": true,
+      "zIndex": 10,
+      "bounds": { "x": 0, "y": 96, "width": 100, "height": 4 },
+      "preset": "base",
+      "hoverPreset": "titleBar",
       "children": [
+        {
+          "id": "chapterNavigation",
+          "componentId": "reader.chapterNavigation",
+          "parentId": "bottomBar",
+          "label": "Chapter navigation",
+          "enabled": true,
+          "bounds": { "x": 36, "y": 8, "width": 28, "height": 84 },
+          "preset": "base",
+          "order": ["previous", "list", "next"],
+          "gap": 3,
+          "popup": {
+            "width": 380,
+            "height": 320,
+            "offset": 8,
+            "headerHeight": 36,
+            "itemHeight": 36,
+            "zIndex": 20
+          },
+          "labels": {
+            "previous": "Previous chapter",
+            "list": "Chapter list",
+            "next": "Next chapter",
+            "title": "Chapters",
+            "drag": "Drag chapter list",
+            "empty": "Open a CBZ to see chapters"
+          },
+          "parts": {
+            "previous": { "preset": "captionButton", "size": { "width": 14, "height": 100 } },
+            "list": { "preset": "captionButton", "size": { "width": 66, "height": 100 } },
+            "next": { "preset": "captionButton", "size": { "width": 14, "height": 100 } },
+            "panel": { "preset": "speedPanel", "size": { "width": 100, "height": 100 } },
+            "header": { "preset": "speedHeader", "size": { "width": 100, "height": 100 } },
+            "chapters": { "preset": "base", "size": { "width": 100, "height": 100 } },
+            "item": { "preset": "chapterItem", "size": { "width": 100, "height": 100 } }
+          }
+        },
         {
           "id": "status",
           "componentId": "shell.status",
           "parentId": "bottomBar",
           "label": "Application status",
-          "enabled": true,
+          "enabled": false,
           "bounds": { "x": 2, "y": 8, "width": 96, "height": 84 },
           "preset": "status"
         }
@@ -279,6 +398,22 @@
     }
   ],
   "connections": [
+    {
+      "from": { "area": "bottomBar", "port": "navigateChapter" },
+      "to": { "area": "body", "port": "navigateChapter" }
+    },
+    {
+      "from": { "area": "body", "port": "navigation" },
+      "to": { "area": "bottomBar", "port": "navigation" }
+    },
+    {
+      "from": { "area": "windowsBar", "port": "setScrollSpeed" },
+      "to": { "area": "body", "port": "setScrollSpeed" }
+    },
+    {
+      "from": { "area": "body", "port": "scrollSpeed" },
+      "to": { "area": "windowsBar", "port": "scrollSpeed" }
+    },
     { "from": { "area": "windowsBar", "port": "open" }, "to": { "area": "body", "port": "open" } },
     {
       "from": { "area": "body", "port": "readerState" },

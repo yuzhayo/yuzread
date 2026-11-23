@@ -497,8 +497,7 @@ export function validateScreenConfig(
     try {
       visual = resolveVisuals(node, raw.presets);
       if (node.hoverPreset !== undefined) {
-        if (!node.draggable || !isId(node.hoverPreset))
-          throw new Error('Invalid area hover preset');
+        if (!isId(node.hoverPreset)) throw new Error('Invalid area hover preset');
         hoverVisual = resolveVisuals({ preset: node.hoverPreset }, raw.presets);
       }
     } catch (error) {
