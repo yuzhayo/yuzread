@@ -119,7 +119,38 @@ const preloadPrepareResult = (
     value.index >= 0 &&
     preloadPositive(value.requestedWidth) &&
     preloadPositive(value.width) &&
-    preloadPositive(value.height));
+    preloadPositive(value.height) &&
+    (value.tiles === undefined ||
+      (Array.isArray(value.tiles) &&
+        typeof value.catalogId === 'string' &&
+        typeof value.entryId === 'string' &&
+        value.tiles.length > 0 &&
+        value.tiles.length <= 10000 &&
+        value.tiles.every(
+          (tile: unknown) =>
+            preloadRecord(tile) &&
+            typeof tile.index === 'number' &&
+            Number.isSafeInteger(tile.index) &&
+            tile.index >= 0 &&
+            typeof tile.left === 'number' &&
+            Number.isSafeInteger(tile.left) &&
+            tile.left >= 0 &&
+            typeof tile.top === 'number' &&
+            Number.isSafeInteger(tile.top) &&
+            tile.top >= 0 &&
+            preloadPositive(tile.width) &&
+            tile.width <= 1024 &&
+            preloadPositive(tile.height) &&
+            tile.height <= 1024 &&
+            preloadPositive(tile.encodedWidth) &&
+            tile.encodedWidth <= 1026 &&
+            preloadPositive(tile.encodedHeight) &&
+            tile.encodedHeight <= 1026 &&
+            (tile.offsetX === 0 || tile.offsetX === 1) &&
+            (tile.offsetY === 0 || tile.offsetY === 1) &&
+            preloadPositive(tile.bytes) &&
+            typeof tile.url === 'string',
+        ))));
 
 // LOGIC — bind each channel's arguments and decoded result to the same declaration.
 async function preloadInvoke<C extends keyof Wire>(

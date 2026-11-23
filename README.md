@@ -27,7 +27,7 @@ screen/
 │   └── reader/
 │       ├── BodyReader.tsx             Own reader state, loading, zoom, UI and SCROLLBAR
 │       ├── BodyReaderPixi.ts           Canvas/input/worker connection
-│       ├── BodyReaderPixiWorker.ts     GPU pages, texture queue and momentum
+│       ├── BodyReaderPixiWorker.ts     GPU tile residency, drawing and momentum
 │       ├── BodyReaderPixiWorkerContract.d.ts  Local worker messages
 │       └── BodyReaderPixiWorkerPolicy.ts    Pure momentum calculations
 │
@@ -193,7 +193,7 @@ narrower windows expose both horizontal edges instead of stretching images.
 
 Its `SCROLLBAR` section owns the right-side overlay's validation, styling,
 hover/drag/wheel and cleanup. There is no vertical gutter, permanent reader toolbar
-or React scrolling frame loop. Page bytes use session/index tokens rather than
+or React scrolling frame loop. Page bytes use authorized chapter/catalog tokens rather than
 arbitrary paths. Cancel/failed initial replacement keeps the current chapter.
 
 Phase 2 is complete: bitmap decode width is explicit and separate from the fixed
@@ -232,7 +232,7 @@ It records queue/image/attachment timing, main-process RSS, callback hitches and
 unexplained scroll movement. Batches/file size are bounded; idle sampling stops.
 Return the flag to `false` for normal reading. RAF cadence is not presented FPS,
 main-process RSS is not total app/VRAM usage, and real-book performance is not certified.
-No toolbar, GPU decoder or frame-limit change was added.
+Diagnostics themselves add no toolbar, GPU decoder or frame-limit change.
 
 ### Pixi GPU pages and momentum
 
@@ -241,27 +241,41 @@ loaded page**, not a first-page preview. The current reader configuration is:
 
 ```json
 "renderer": "pixi",
-"momentum": { "enabled": true, "speed": 1 }
+"momentum": { "enabled": true, "speed": 1 },
+"maxFPS": 60,
+"tileMemoryMB": 128
 ```
 
 Normal wheel ticks ramp into motion, coast and settle. Ctrl+wheel/Ctrl+0 keep their
 zoom behavior and interrupt old momentum. Keyboard/scrollbar positioning, blur,
 hidden state, picker and close also stop it. Fine pixel input is left native using
 a small-delta heuristic to avoid adding a second device-inertia tail; it is not a
-guaranteed mouse/touchpad classifier. There is no idle animation loop or 60-FPS cap.
+guaranteed mouse/touchpad classifier. Drawing/position updates are capped at 60 per
+second; unchanged content is not redrawn and no idle animation loop runs.
 
-Accepted images live as worker bitmaps/textures; DOM elements only reserve geometry
+Lossless 1024-pixel tiles with sampling borders stay on disk. Only a bounded working
+set of visible/nearby/recent tiles becomes worker bitmaps/textures; DOM elements reserve geometry
 and page names, not duplicate image pixels. The canvas is viewport-sized and only
-visible pages are drawn. Large pages use bounded padded tiles; upload/retirement and
-extra render/staging estimates participate in the same native budget. Original
+intersecting tiles are drawn. The 128 MiB setting estimates CPU tile bitmaps plus GPU
+textures, **not total app RAM or VRAM**. Visible tiles are protected even if they
+exceed that nominal pool. Upload/retirement and render/staging capacity reservations
+participate in the same native budget. Original
 decode/cache, fixed geometry and current + next policies remain. `renderer: "dom"`
 is the explicit compatibility choice, not a concurrent second rendering path.
 
-Three focused schema/momentum tests, strict checks, builds and a two-chapter GPU
-integration check passed, including non-first-page pixels, momentum chapter handoff,
-backward reload, zoom interruption, resize and cleanup. **Presented FPS has not been
-measured.** `reader-plan.md` retains remaining validation/performance work; no full
-suite or lengthy benchmark was run.
+Focused checks passed pixels/seams, cache reuse after chapter eviction, corrupt-cache
+refusal/repair, scrolling/reversal at 10×, chapter navigation, zoom, resize and cleanup.
+The short generated-fixture comparison reduced renderer working set from about
+612 to 200 MB; app-scoped dedicated GPU memory averaged 117 MB (131 MB peak).
+GPU activity during new-tile upload was higher than Pass 1, so the overall
+lowest-resource goal remains **partial**. **Presented FPS and real-book performance
+are not certified.** `reader-plan.md` retains that unfinished work; no full suite ran.
+
+GPU slots now reuse exact-size storage when offscreen tiles must be replaced.
+A short real-CBZ 10× reversal reduced new texture allocations **121 → 21** (about
+83%), with unchanged returned page pixels and no tile-blocked updates. The 60 cap
+and 128 MiB pool stay unchanged. GPU percentage/CPU-time savings are not certified:
+device clock/activity varied. Results and scope are in `reader-plan.md`.
 
 ## Agent-owned machinery
 

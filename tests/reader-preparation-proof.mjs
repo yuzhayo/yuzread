@@ -70,5 +70,25 @@ try{
   assert.equal(race.ok,false);assert.equal((await fetchPage(`yuzread-page://page/${next.chapter.id}/0-1600.png`)).status,404);
   checks.push('source revision change rejects even cache hits; released in-flight work cannot publish a late token');
   assert.equal((await readdir(path.join(userData,'reader-cache'))).filter(file=>file.startsWith('reader-')).length,0);
-  const result={verdict:'PASS',checks,observations,sourceRevision:chapter.sourceRevision,evidence};await writeFile(path.join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
+   // Resource-pass regression: use the same native preparation path, now with lossless disk tiles.
+   const tileOptions={renderWidth:1600,maxDecodeWidth:1600,maxDecodedMB:512,tileCache:true};
+   const tiledOpen=await open(tileOptions);assert.equal(tiledOpen.ok,true);
+   const tiled=await prepare(tiledOpen.chapter,0,1600);assert.equal(tiled.ok,true);assert.equal(tiled.tiles.length,4);
+   assert.equal(tiled.catalogId,tiledOpen.catalog.id);assert.equal(tiled.entryId,tiledOpen.chapter.entryId);
+   assert.equal((await fetchPage(tiled.url)).status,404,'tile mode must not expose a duplicate whole-page PNG');
+   const tileDirectory=path.join(userData,'reader-cache',`catalog-${tiled.catalogId}`,`e-${tiled.entryId.replaceAll('-','')}`,`${hash(Buffer.from(JSON.stringify([tiled.sourceRevision,tiled.pageId,tiled.width])))}-${tiled.width}.png.tiles`);
+   const pieces=[];
+   for(const tile of tiled.tiles){const delivered=await fetchPage(tile.url);assert.equal(delivered.status,200);const buffer=await sharp(Buffer.from(delivered.bytes)).extract({left:tile.offsetX,top:tile.offsetY,width:tile.width,height:tile.height}).png().toBuffer();pieces.push({input:buffer,left:tile.left,top:tile.top});}
+   const assembled=await sharp({create:{width:tiled.width,height:tiled.height,channels:4,background:'#00000000'}}).composite(pieces).raw().toBuffer();
+   const reference=await sharp(path.join(pages,'01-large.png')).ensureAlpha().raw().toBuffer();assert.deepEqual(assembled,reference,'every source pixel, including tile seams, must survive');
+   const tileFile=path.join(tileDirectory,'0_0.png'),saved=await stat(tileFile,{bigint:true}),savedHash=hash(await readFile(tileFile));
+   await release(tiledOpen.chapter);assert.equal((await fetchPage(tiled.tiles[0].url)).status,200,'catalog tile authority survives archive-worker eviction');
+   const reloaded=await page.evaluate(({catalogId,entryId,options})=>window.shellHost.reader.chapter(catalogId,entryId,options,'demand'),{catalogId:tiled.catalogId,entryId:tiled.entryId,options:tileOptions});assert.equal(reloaded.ok,true);assert.notEqual(reloaded.chapter.id,tiledOpen.chapter.id);
+   const reused=await prepare(reloaded.chapter,0,1600);assert.equal(reused.ok,true);assert.equal(reused.tiles[0].url,tiled.tiles[0].url);assert.equal((await stat(tileFile,{bigint:true})).mtimeNs,saved.mtimeNs);
+   await writeFile(tileFile,Buffer.from([137,80,78,71,13,10,26,10]));assert.equal((await fetchPage(reused.tiles[0].url)).status,404);
+   assert.equal((await prepare(reloaded.chapter,0,1600)).ok,true);assert.equal(hash(await readFile(tileFile)),savedHash);
+   await appendFile(archive,Buffer.from([0]));assert.equal((await fetchPage(reused.tiles[0].url)).status,404);assert.equal((await prepare(reloaded.chapter,0,1600)).ok,false);
+   await page.evaluate(id=>window.shellHost.reader.release(id),tiled.catalogId);assert.equal((await fetchPage(reused.tiles[0].url)).status,404);await assert.rejects(stat(tileDirectory));await writeFile(archive,original);
+   checks.push('lossless padded tiles reconstruct every pixel and seam without a duplicate page surface','disk tiles and catalog tokens survive worker eviction/reload; corruption is refused and repaired','changed sources and catalog retirement revoke tiles and clean their owned disk cache');
+   const result={verdict:'PASS',checks,observations,sourceRevision:chapter.sourceRevision,evidence};await writeFile(path.join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
 }catch(error){await writeFile(path.join(evidence,'result.json'),JSON.stringify({verdict:'FAIL',error:String(error),checks,evidence},null,2));throw error;}finally{await app.close();}

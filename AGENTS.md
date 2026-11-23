@@ -64,9 +64,95 @@ ownership, reasons and working rules; the reader plan records unfinished work.
 Transfer lasting decisions/status from completed task plans here, then remove the
 completed standalone plans. Do not accumulate redundant planning Markdown files.
 
+### Resource optimization — 2026-11-23, supersedes uncapped/high-refresh targets
+
+The operator now prefers a 60-update ceiling and the lowest practical CPU/GPU/RAM/
+VRAM without loss of resolution, colors, geometry or smooth scrolling. Do not restore
+uncapped/high-refresh rendering or blindly force WebGL alpha:false. Pass 1 adds
+deadline-based maxFPS=60, per-tile culling, unchanged-frame skipping and bounded
+position publication. Pass 2 keeps single-level lossless 1024-pixel PNG disk tiles
+with one-pixel sampling borders and bounded visible/nearby/recent bitmap+texture
+residency. Tile mode does not reserve full chapter surfaces. Legacy whole-page PNG
+preparation remains supported; Sharp stays CPU/libvips, concurrency 1/cache disabled.
+
+reader JSON tileMemoryMB=128 is a nominal estimate for CPU tile bitmaps plus GPU
+textures, not total app RAM/VRAM. Visible tiles are never sacrificed to force it.
+The same shared native admission owner reserves pool capacity plus 16 MiB staging
+before background native decoding starts, avoiding competition with its exclusive
+workspace grant. Actual framebuffer/render-worker overhead is additional in that
+same ledger; capacity reservation is not sampled memory. Lookahead starts two
+screens ahead/one behind, expands up to four ahead for fast movement, and loads
+nearest demand/directional tiles first. At most two full tile uploads per admitted
+update; cold-tile waiting preserves momentum instead of decaying it or jumping ahead.
+
+CbzArchive owns catalog-scoped verified manifests/PNG tiles. Catalog/page/width
+tokens survive chapter-worker eviction; reload validates/reuses the same disk files.
+Retired chapter descriptors may draw nearby tiles through that bounded pool, not a
+permanent previous-chapter surface slot. Catalog release revokes authorization,
+awaits active and already-closing workers and deletes its owned cache. Source changes
+or corrupt files are refused. Full-page .png tokens intentionally return 404 in
+tile mode. Preload/parent adapters validate optional tile data; renderer validates
+exact URLs, ordered coverage/dimensions and source identity.
+
+Tile-load failures preserve the last complete framebuffer and report non-blocking
+status rather than closing the canvas. Explicit input retries; successful drawing
+clears the issue. Initial/navigation warming uses the actual destination rectangle.
+Fixed page boxes, zoom/speed, current+next policy and short-visible-chapter protection
+remain unchanged. No dependency, title/sizing/control placement or Load folder changed.
+
+Functional/static verdict PASS; overall resource/presentation verdict PARTIAL.
+The short paired 1× fixture measured draw updates 165.05 → 60.20/sec, renderer working
+set 612.21 → 200.32 MB and GPU-process working set 551.42 → 118.28 MB. Working sets
+are not unique total RAM/VRAM. Current app-scoped dedicated GPU memory averaged
+117.26 MB (130.66 MB peak); old VRAM/CPU baselines were not collected. GPU busiest-
+engine average was 13.66% before, 7.75% in Pass 1 and 17.47% with tile streaming;
+the upload tradeoff remains unresolved. Final GPU was at 210–217 MHz/P8/about 7 W;
+old runs did not capture clock state. Do not claim every resource decreased or
+that this reproduces the operator's real-book 50% workload.
+
+check:code, both builds and seven focused math/contract tests passed. Evidence:
+.runtime/reader-resource-pass2-final-1795410370169/result.json (1×, idle zero, tile
+failure/framebuffer retention/retry), .runtime/reader-resource-pass2-final-fast-
+1795410078963/result.json (10× reversal, zero tile-blocked updates),
+.runtime/reader-phase2-proof-1795410422444/result.json (legacy plus lossless seams,
+worker-eviction reuse, corruption repair and catalog cleanup),
+.runtime/reader-pixi-1795410100734/result.json and
+.runtime/chapter-navigation-1795410208028/result.json (chapter/zoom/resize/cleanup).
+Initial fixture screenshot pixels matched the old screenshot exactly. No full suite,
+prolonged benchmark, real-book/presented-FPS or GPU-loss certification. reader-plan.md
+retains unfinished acceptance; no commit/push without an operator request.
+
+GPU upload follow-up, same day: BodyReaderPixiWorker reuses an exact-size owned
+ImageSource GPU texture only when tile eviction is already required. It closes the
+old bitmap, transfers that single slot through existing staging accounting, updates
+frame/UVs and uses source.update()/texSubImage2D. Different dimensions are not reused.
+Equal rank-5/distant victims prefer matching storage before LRU; visible/nearby
+priorities/order do not change. No spare pool, native/dependency/memory-limit/global
+GPU-setting change. Failed/cancelled transferred resources are destroyed; ordinary
+retirement still destroys owned surfaces. Keep this private to the reader worker.
+
+The read-only real-book Episode 1 of 66,666 Years: Advent of the Dark Mage (168 pages,
+initial 800×1000) measured 1× cold/warm GPU averages 6.71%/6.82% with 43 MB/zero
+uploads. At 10× reversal, new allocations fell 121 → 21 (about 83%), deletions
+104 → 2 and 101 updates reused storage. Zero tile-blocked updates/idle redraws.
+Do not claim CPU upload-time savings (177.5 → 193.4 ms) or GPU-percent savings
+(7.21% → 1.92%): clocks changed 270 → 915–1980 MHz and device activity varied.
+Final dedicated GPU memory averaged 136.25 MB, peak 136.63 MB; resident tile estimate
+was about 123.3 MiB. Process/driver memory is not guaranteed by that estimate.
+
+Final mixed-size fixture: 17 allocations/242 updates, unchanged returned seam/
+viewport pixels and successful failure/retry. Real returned pixels matched too.
+Fresh check:code, screen build, seven math/contract tests and Pixi smoke passed.
+Evidence: .runtime/reader-resource-real-reuse-final-1795412590982/result.json,
+.runtime/reader-resource-reuse-final-1795412530884/result.json and
+.runtime/reader-pixi-1795412703490/result.json; before/cold references are in the
+existing reader-plan.md. The existing resource test supports --archive, --warm-replay
+and --verify-reuse; no new proof app, library scan or full suite. Overall presented-
+frame/resource acceptance remains partial.
+
 ### Pixi GPU reader migration — all-page rendering and momentum implemented
 
-The operator's goal is GPU-drawn scrolling with consistently paced 60+ presented FPS
+The operator's goal is GPU-drawn scrolling with consistently paced 60-class frames
 while decode/preload continues, not merely a JavaScript momentum effect. The current
 plan is `reader-plan.md`. The operator approved implementation, explicitly rejected
 excessive testing/engineering and rejected a first-page-only scrolling test. Every
@@ -132,7 +218,8 @@ feedback message bound UI backlog. Control revisions discard obsolete movement;
 layout rebases preserve motion, while zoom, direct inputs, picker, blur/hidden and
 close cancel it. Fine pixel deltas use a documented small-delta native-input
 heuristic, not a claimed device classifier. Draw/animation work stops when idle.
-No React per-frame state or artificial 60-FPS cap is introduced. Renderer preparation
+No React per-frame state is introduced. The later resource decision caps updates at
+60/sec; the original uncapped target is superseded. Renderer preparation
 timings are not mislabeled as DOM image decode or presented FPS.
 
 Focused evidence: `.runtime/reader-pixi-1795366639173/result.json` passed six GPU pages

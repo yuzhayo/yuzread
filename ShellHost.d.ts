@@ -68,6 +68,7 @@ export interface ReaderOpenOptions {
   maxDecodeWidth: number;
   maxDecodedMB: number;
   picker?: ReaderPickerSettings;
+  tileCache?: boolean;
 }
 export type ReaderOpenResult =
   | { ok: true; canceled: true }
@@ -86,9 +87,24 @@ export type ReaderPrepareRequest = [
   decodeWidth: number,
   priority?: ReaderWorkPriority,
 ];
+export interface ReaderPreparedTile {
+  index: number;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  encodedWidth: number;
+  encodedHeight: number;
+  offsetX: number;
+  offsetY: number;
+  bytes: number;
+  url: string;
+}
 export interface ReaderPreparedPage {
   ok: true;
   id: string;
+  catalogId?: string;
+  entryId?: string;
   index: number;
   pageId: string;
   sourceRevision: string;
@@ -97,6 +113,7 @@ export interface ReaderPreparedPage {
   height: number;
   url: string;
   budget?: ReaderBudget;
+  tiles?: ReaderPreparedTile[];
 }
 export type ReaderPrepareResult = ReaderPreparedPage | Failure;
 export type ReaderRenderReserveRequest = [owner: string, bytes: number, maxDecodedMB: number];

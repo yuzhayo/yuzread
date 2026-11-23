@@ -1,6 +1,6 @@
 # Yuzread — Pixi GPU reader migration
 
-Status: **All-page Pixi rendering and momentum implemented; remaining acceptance/performance work pending.**
+Status: **60-update ceiling and bounded disk-tile residency implemented; functional checks pass, overall resource/presentation acceptance PARTIAL.**
 
 The operator requested this plan on 2026-11-22, then approved implementation without
 overtesting/overengineering and explicitly rejected limiting scroll testing to one
@@ -15,8 +15,9 @@ architecture or TypeScript migration.
 
 Move page drawing and smooth scrolling to **PixiJS in a dedicated rendering
 worker**, using OffscreenCanvas and GPU-backed WebGL/WebGPU rendering. Target
-consistently paced **60+ presented FPS while scrolling**, including preparation of
-the next chapter, without an artificial 60-FPS ceiling. Validate this on the
+consistently paced **60-class scrolling with a 60-update ceiling**, including preparation of
+the next chapter. The operator's 2026-11-23 resource decision supersedes the former
+uncapped/high-refresh target. Validate this on the
 operator's actual PC; a ticker setting or callback counter is not the acceptance
 proof. Idle content does not need continuous redraws.
 
@@ -30,6 +31,109 @@ reader's policies and native archive service, while adapting the DOM-dependent
 geometry/visibility/scrolling code that cannot remain unchanged.
 
 ## Current delivered slice — 2026-11-23
+
+### Resource optimization — approved two passes
+
+- [x] Pass 1: 60-update deadline, per-tile culling, unchanged-frame skipping and
+  bounded position publication. Idle redraws remain zero.
+- [x] Pass 2: single-level lossless 1024-pixel PNG tiles, one-pixel sampling borders,
+  verified manifests/files and lazy bitmap/texture loading without full-chapter
+  surface reservations in tile mode. Legacy whole-PNG preparation remains supported.
+- [x] Use a 128 MiB estimated bitmap+texture pool, protecting visible pixels.
+  Lookahead starts at two screens ahead/one behind, expands with fast motion up to
+  four ahead, and prioritizes nearest visible/directional tiles. At most two full
+  tile uploads fit one admitted update. A cold tile waits without consuming momentum
+  or creating a catch-up position jump.
+- [x] Preserve catalog-owned disk tiles and URLs across archive-worker eviction;
+  reload reuses verified files. Catalog retirement revokes tokens and waits for
+  active/closing workers before deleting its cache. Initial/navigation warm ranges
+  use the actual destination, not a one-pixel page-top placeholder.
+- [x] Tile failures preserve the last complete framebuffer, report non-blocking
+  status and stop movement; explicit input retries without closing the GPU canvas.
+- [x] Strict checks, both builds, seven focused contract/math tests, native preparation/
+  lossless seam/cache checks, Pixi smoke and chapter navigation checks passed.
+- [x] Real-CBZ cold/warm comparison and exact-size GPU slot reuse under pool
+  pressure, retaining pixel quality, bounded residency and 10× reversal.
+- [ ] Resolve/accept the GPU upload tradeoff on the operator's real book; do not
+  declare all four resource goals reduced. Actual presented-frame pacing remains
+  unmeasured. No full suite or prolonged benchmark is authorized by this plan.
+
+### GPU upload follow-up — 2026-11-23
+
+Runtime/test edits are limited to BodyReaderPixiWorker.ts and the existing
+reader-resource-proof.mjs. An eviction already required by policy can transfer an
+exact-size ImageSource texture to the incoming tile. The old bitmap closes; public
+source.update() performs texSubImage2D without deleting/reallocating GPU storage.
+Equal rank-5/distant victims prefer matching storage before LRU; visible/nearby
+priorities/order stay unchanged. There is no spare pool, stretched tile or new
+allowance. Existing staging accounts the transferred slot, which is destroyed on
+failure/cancellation. No native/dependency/global GPU-setting change.
+
+Read-only real sample: 66,666 Years: Advent of the Dark Mage, Episode 1, 168 pages,
+initial pages 800×1000. The existing reader ran in QA mode, not a new proof app.
+Eight-second 1× cold/warm GPU averages were 6.71%/6.82%; image uploads were 43 MB/
+zero. Uploads were not the dominant activity at that speed on this book.
+
+Eight-second 10× reversal before/final:
+
+| Measurement | Before reuse | Final reuse |
+| --- | ---: | ---: |
+| New texture/storage allocations | 121 | 21 |
+| Texture deletions | 104 | 2 |
+| In-place uploads | 0 | 101 |
+| Uploaded image MB | 354.88 | 360.96 |
+| CPU upload-call ms, not GPU duration | 177.5 | 193.4 |
+| Worker updates/sec, not presented FPS | 60.01 | 59.93 |
+| Tile-blocked updates / idle redraws | 0 / 0 | 0 / 0 |
+
+Allocations fell about 83%; bytes/pixels were not reduced. CPU-time/GPU-percent
+savings are **not** certified. GPU averages were 7.21%/1.92%, but graphics clocks
+changed 270 MHz → 915–1980 MHz and device activity varied. Do not compare those
+percentages as direct savings. Final dedicated GPU memory averaged 136.25 MB,
+peak 136.63 MB; resident tile estimate was about 123.3 MiB. The estimate is not a
+driver/compositor VRAM cap. Short input/frame timing differences remain.
+
+Final mixed-size fixture used 17 allocations/242 in-place uploads, zero tile-blocked
+updates/idle redraws and successful injected tile-failure retention/retry. Returned
+1240×1120 pixel regions matched exactly for fixture and real book; the fixture region
+crosses both tile seams while excluding UI overlays. Fresh check:code, screen build,
+seven math/contract checks and Pixi chapter/zoom/resize/cleanup smoke passed.
+
+Evidence: `.runtime/reader-resource-real-upload-before-1795411860263/result.json`,
+`.runtime/reader-resource-real-fast-before-1795411981784/result.json`,
+`.runtime/reader-resource-real-reuse-final-1795412590982/result.json`,
+`.runtime/reader-resource-reuse-final-1795412530884/result.json` and
+`.runtime/reader-pixi-1795412703490/result.json`. Existing test flags now support
+--archive, --warm-replay and --verify-reuse. No full suite, library scan,
+presented-FPS measurement or commit/push. Overall acceptance remains partial.
+
+Short same-fixture comparison (24 patterned 1600×4800 source pages, 1320×1320
+window, DPR 1, eight seconds of 1× wheel input):
+
+| Measurement | Before | Pass 1 | Pass 2 final |
+| --- | ---: | ---: | ---: |
+| Worker draw updates/sec, not presented FPS | 165.05 | 60.08 | 60.20 |
+| Submitted indices | 81,408 | 13,476 | 13,560 |
+| Renderer working set, MB | 612.21 | 602.18 | 200.32 |
+| GPU-process working set, MB, not VRAM | 551.42 | 570.09 | 118.28 |
+| App GPU busiest-engine average | 13.66% | 7.75% | 17.47% |
+| Idle redraws | 0 | 0 | 0 |
+
+Final dedicated GPU-memory counters averaged 117.26 MB, peak 130.66 MB; no matching
+old VRAM baseline was collected. Final workload CPU percentages were Browser 0.27%,
+GPU 0.87%, Tab 1.40%, Utility 0.005%; no paired CPU baseline exists. Process working
+sets overlap and must not be summed as unique RAM. Final GPU clock was 210–217 MHz,
+P8, around 7 W; old comparisons did not record clocks. These fixture numbers do
+not reproduce or certify the operator's reported real-book 50% GPU workload.
+
+Evidence: `.runtime/reader-resource-pass2-final-1795410370169/result.json`,
+`.runtime/reader-resource-pass2-final-fast-1795410078963/result.json` (10× reversal,
+zero tile-blocked updates), `.runtime/reader-phase2-proof-1795410422444/result.json`,
+`.runtime/reader-pixi-1795410100734/result.json` and
+`.runtime/chapter-navigation-1795410208028/result.json`. The final initial screenshot
+is pixel-identical to the pre-optimization fixture screenshot; native reconstruction
+checks every tile/seam pixel. Failure injection confirmed framebuffer retention and
+explicit-input recovery. Tile residency was 27 tiles/about 126.4 MiB in the workload.
 
 ### Completed tasklist — bottom chapter navigation
 
@@ -53,7 +157,7 @@ WindowsAreaBtnScrollSpeed.tsx. Its JSON range defaults to 10–100 with step 1 a
 Reset=10; value/10 maps to 1×–10×. It changes current worker momentum immediately,
 with no worker/page restart. The UI/drag/outside-close check and focused math/schema
 checks passed; this is not presented-FPS evidence. Remaining automatic-scroll,
-chapter-navigation, drag/drop and installer work is still separate.
+drag/drop and installer work is still separate.
 
 - Removed the first-page preview limit and pixiPreview option. Current configuration
   enables renderer=pixi and momentum enabled/speed=1 for operator testing.
@@ -81,14 +185,14 @@ chapter-navigation, drag/drop and installer work is still separate.
 
 The sections below retain the target design and outstanding acceptance criteria.
 The DOM remains the lightweight geometry/chapter adapter in this delivered slice;
-do not describe it as completely removed or claim the 60+ presented-FPS goal is proven.
+do not describe it as completely removed or claim presented-FPS acceptance is proven.
 
 Future application ownership remains **Downloader -> Library -> Reader**:
 Downloader delivers completed manga to Library; standalone Library asks Reader to
 open it; Reader works independently. This migration does not build those apps or
-introduce a central feature registry. Also outside this migration: manual
-previous/next controls, auto-scroll, speed-control UI, CBZ drag/drop and installer/
-Windows file association. Smooth manual scrolling is the first new reader feature.
+introduce a central feature registry. Manual chapter navigation and speed controls
+are now delivered. Auto-scroll, CBZ drag/drop and installer/Windows file association
+remain separate unfinished features.
 
 ## 2. Preserve these behaviors
 
@@ -256,7 +360,7 @@ Use elapsed time and refresh-independent integration; compare travel and reversa
 at 60/120/165-Hz schedules. Ctrl+wheel remains zoom, Shift/horizontal input remains
 horizontal navigation, and consumed inputs do not also run a native scrolling path.
 Preserve pointer/center zoom anchors. Reduced motion uses direct movement. Keep
-momentum tuning in validated reader JSON; speed-control UI is a later feature.
+momentum tuning in validated reader JSON; the existing speed-control UI remains live.
 
 Zoom, direct scrollbar/keyboard positioning, picker pause, replacement, blur,
 hidden/pagehide and close have explicit interruption semantics. Rebase on layout
@@ -356,8 +460,8 @@ chapters are never evicted from delayed UI information. No React per-frame loop.
 
 ### M5 — Focused behavior and presented-frame acceptance [pending]
 
-- Add tests/reader-pixi-proof.mjs with generated mixed/tall/short chapter fixtures
-  and optional --archive <caller-supplied-real.cbz>. Do not scan the user's library.
+- Reuse the existing focused checks and a caller-selected real CBZ; do not create
+  another proof project or scan the user's library.
 - Use a short, declared, reproducible scroll workload on the actual monitor: warm
   current chapter, next decode/upload during movement, and a chapter handoff/backward
   reload. Record archive, cache state, zoom, DPI, window size, GPU backend and Hz.
@@ -365,11 +469,11 @@ chapters are never evicted from delayed UI information. No React per-frame loop.
   Chromium tracing with actual compositor presentation feedback when available;
   distinguish worker updates, GPU submission and presented moving frames. Check
   event availability before naming a capture a presented-FPS measurement.
-- Target a sustained 60-class or higher rate of distinct moving frames, with a
-  roughly 16.7-ms-or-better frame budget and documented refresh/clock tolerance
+- Target a sustained 60-class rate of distinct moving frames, with a
+  roughly 16.7-ms frame budget and documented refresh/clock tolerance
   (59.94-Hz displays are 60-class). Report rolling rates, p50/p95/p99/max intervals,
   missed frames and >25/>50-ms hitches; an average FPS alone cannot pass pacing.
-- Verify no artificial 60 ceiling on a higher-Hz monitor. Report achieved rate;
+- Verify the requested 60-update ceiling on a higher-Hz monitor. Report achieved rate;
   monitor Hz or ticker FPS is not a substitute. Keep controlled injected stalls
   separate from normal-workload measurements.
 - Run only affected behavior checks plus npm run check:code and build. Adapt affected
@@ -377,7 +481,7 @@ chapters are never evicted from delayed UI information. No React per-frame loop.
   weakening them for canvas. No automatic full suite or prolonged benchmark.
 
 **Exit:** Focused behavior is correct and measured normal-workload scrolling meets
-the declared 60+ goal with stable pacing, including background work. If real-book
+the declared 60-class goal with stable pacing, including background work. If real-book
 or presentation evidence is missing, mark that acceptance PARTIAL and leave it
 pending; do not substitute callback statistics or certify an untested workload.
 

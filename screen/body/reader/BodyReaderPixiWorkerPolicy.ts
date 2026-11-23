@@ -32,3 +32,28 @@ export function advanceMomentum(velocity: number, target: number, elapsed: numbe
     Math.abs(nextVelocity) >= STOP_SPEED * speed || Math.abs(nextTarget) >= STOP_SPEED * speed;
   return { distance, velocity: moving ? nextVelocity : 0, target: moving ? nextTarget : 0, moving };
 }
+// Rendering follows a deadline accumulator; late frames never produce catch-up bursts.
+export function advanceRenderDeadline(time: number, deadline: number, fps = 60) {
+  const interval = 1000 / fps;
+  if (time + 0.01 < deadline) return { ready: false, deadline };
+  return {
+    ready: true,
+    deadline:
+      deadline <= 0
+        ? time + interval
+        : deadline + (Math.floor(Math.max(0, time - deadline) / interval) + 1) * interval,
+  };
+}
+export const tileInViewport = (
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  margin = 0,
+) =>
+  left + width > -margin &&
+  left < viewportWidth + margin &&
+  top + height > -margin &&
+  top < viewportHeight + margin;

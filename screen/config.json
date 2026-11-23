@@ -304,6 +304,8 @@
           "zoomStep": 0.1,
           "diagnostics": false,
           "renderer": "pixi",
+          "maxFPS": 60,
+          "tileMemoryMB": 128,
           "momentum": { "enabled": true, "speed": 1 },
           "scrollbar": {
             "width": 15,

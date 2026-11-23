@@ -360,6 +360,10 @@ const cacheFile = (
     .digest('hex');
   return path.join(directory, `${identity}-${variant.width}.png`);
 };
+const tileDirectory = (
+  directory: string,
+  variant: Pick<PreparedPage, 'sourceRevision' | 'pageId' | 'width'>,
+) => `${cacheFile(directory, variant)}.tiles`;
 async function fileDigest(file: FileHandle): Promise<string> {
   const hash = createHash('sha256');
   for await (const chunk of file.createReadStream({ start: 0, autoClose: false })) {
@@ -372,11 +376,35 @@ async function fileDigest(file: FileHandle): Promise<string> {
 async function verifyCache(directory: string, variant: PreparedPage): Promise<boolean> {
   let file: FileHandle | undefined;
   try {
-    file = await fs.open(cacheFile(directory, variant), 'r');
-    const stat = await file.stat();
-    return (
-      stat.isFile() && stat.size === variant.bytes && (await fileDigest(file)) === variant.sha256
+    file = await fs.open(
+      variant.tiles
+        ? path.join(tileDirectory(directory, variant), 'manifest.json')
+        : cacheFile(directory, variant),
+      'r',
     );
+    const stat = await file.stat();
+    if (
+      !stat.isFile() ||
+      stat.size !== variant.bytes ||
+      (await fileDigest(file)) !== variant.sha256
+    )
+      return false;
+    if (variant.tiles)
+      for (const tile of variant.tiles) {
+        const handle = await fs.open(path.join(tileDirectory(directory, variant), tile.file), 'r');
+        try {
+          const info = await handle.stat();
+          if (
+            !info.isFile() ||
+            info.size !== tile.bytes ||
+            (await fileDigest(handle)) !== tile.sha256
+          )
+            return false;
+        } finally {
+          await handle.close();
+        }
+      }
+    return true;
   } catch {
     return false;
   } finally {
@@ -385,7 +413,10 @@ async function verifyCache(directory: string, variant: PreparedPage): Promise<bo
 }
 // Use the global web-stream type and the already verified descriptor. No Node/DOM
 // stream assertion, pathname reopen, or whole-file buffer is needed for delivery.
-function cachedBody(file: FileHandle, variant: PreparedPage): ReadableStream<Uint8Array> {
+function cachedBody(
+  file: FileHandle,
+  variant: Pick<PreparedPage, 'bytes' | 'sha256'>,
+): ReadableStream<Uint8Array> {
   let position = 0,
     closed = false;
   const hash = createHash('sha256');
@@ -430,6 +461,8 @@ interface WorkerSettings {
   maxDecodedBytes: number;
 }
 interface ArchiveWorkerData {
+  tileCache: boolean;
+  cachedVariants: PreparedPage[];
   filePath: string;
   directory: string;
   renderWidth: number;
@@ -456,7 +489,22 @@ interface PreparedPage {
   sourceRevision: string;
   bytes: number;
   sha256: string;
+  tiles?: PreparedTile[];
   timing?: { inputMs: number; imageMs: number; cacheHit: boolean };
+}
+interface PreparedTile {
+  index: number;
+  file: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  encodedWidth: number;
+  encodedHeight: number;
+  offsetX: number;
+  offsetY: number;
+  bytes: number;
+  sha256: string;
 }
 type WorkerReply =
   | { requestId: number; ok: true; value: ChapterManifest | PreparedPage; residentBytes: number }
@@ -470,6 +518,7 @@ type PendingRequest = { availableBytes: number } & (
     }
 );
 interface ArchiveSession {
+  tileCache: boolean;
   catalogId: string;
   entryId: string;
   chapter?: Chapter;
@@ -504,6 +553,7 @@ interface ArchiveCatalog {
   entries: CatalogEntry[];
   options: ReaderOpenOptions;
   requests: Map<string, { width: number; task: Promise<ReaderChapterResult> }>;
+  cachedVariants: Map<string, PreparedPage>;
 }
 const positive = (value: unknown): value is number =>
   typeof value === 'number' && Number.isInteger(value) && value > 0;
@@ -525,21 +575,64 @@ const isManifest = (value: unknown): value is ChapterManifest =>
   typeof value.estimatedBytes === 'number' &&
   Array.isArray(value.pages) &&
   value.pages.every(pageMetadata);
-const isPrepared = (value: unknown): value is PreparedPage =>
-  isRecord(value) &&
-  typeof value.index === 'number' &&
-  Number.isInteger(value.index) &&
-  value.index >= 0 &&
-  positive(value.width) &&
-  value.width <= MAX_WIDTH &&
-  positive(value.height) &&
-  digest(value.pageId) &&
-  digest(value.sourceRevision) &&
-  positive(value.bytes) &&
-  digest(value.sha256);
+const isPrepared = (value: unknown): value is PreparedPage => {
+  if (!isRecord(value)) return false;
+  const { width, height } = value;
+  return (
+    isRecord(value) &&
+    typeof value.index === 'number' &&
+    Number.isInteger(value.index) &&
+    value.index >= 0 &&
+    positive(width) &&
+    width <= MAX_WIDTH &&
+    positive(height) &&
+    digest(value.pageId) &&
+    digest(value.sourceRevision) &&
+    positive(value.bytes) &&
+    digest(value.sha256) &&
+    (value.tiles === undefined ||
+      (Array.isArray(value.tiles) &&
+        value.tiles.length > 0 &&
+        value.tiles.length <= 10000 &&
+        value.tiles.length === Math.ceil(width / 1024) * Math.ceil(height / 1024) &&
+        value.tiles.every(
+          (tile: unknown, index: number) =>
+            isRecord(tile) &&
+            typeof tile.file === 'string' &&
+            /^\d+_\d+\.png$/.test(tile.file) &&
+            typeof tile.index === 'number' &&
+            Number.isInteger(tile.index) &&
+            tile.index === index &&
+            typeof tile.left === 'number' &&
+            typeof tile.top === 'number' &&
+            tile.left === (index % Math.ceil(width / 1024)) * 1024 &&
+            tile.top === Math.floor(index / Math.ceil(width / 1024)) * 1024 &&
+            positive(tile.width) &&
+            positive(tile.height) &&
+            tile.width === Math.min(1024, width - tile.left) &&
+            tile.height === Math.min(1024, height - tile.top) &&
+            positive(tile.encodedWidth) &&
+            positive(tile.encodedHeight) &&
+            typeof tile.offsetX === 'number' &&
+            typeof tile.offsetY === 'number' &&
+            tile.offsetX === (tile.left ? 1 : 0) &&
+            tile.offsetY === (tile.top ? 1 : 0) &&
+            tile.encodedWidth ===
+              tile.width + tile.offsetX + (tile.left + tile.width < width ? 1 : 0) &&
+            tile.encodedHeight ===
+              tile.height + tile.offsetY + (tile.top + tile.height < height ? 1 : 0) &&
+            positive(tile.bytes) &&
+            digest(tile.sha256),
+        )))
+  );
+};
 const isWorkerData = (value: unknown): value is ArchiveWorkerData =>
   isRecord(value) &&
   typeof value.diagnostics === 'boolean' &&
+  typeof value.tileCache === 'boolean' &&
+  Array.isArray(value.cachedVariants) &&
+  value.cachedVariants.length <= 10000 &&
+  value.cachedVariants.every(isPrepared) &&
   typeof value.filePath === 'string' &&
   typeof value.directory === 'string' &&
   positive(value.renderWidth) &&
@@ -596,8 +689,9 @@ const openOptions = (value: unknown): value is ReaderOpenOptions =>
   value.maxDecodedMB >= 64 &&
   value.maxDecodedMB <= 4096 &&
   (value.picker === undefined || pickerOptions(value.picker)) &&
+  (value.tileCache === undefined || typeof value.tileCache === 'boolean') &&
   Object.keys(value).every((key) =>
-    ['renderWidth', 'maxDecodeWidth', 'maxDecodedMB', 'picker'].includes(key),
+    ['renderWidth', 'maxDecodeWidth', 'maxDecodedMB', 'picker', 'tileCache'].includes(key),
   );
 const ordered = (a: IndexedEntry, b: IndexedEntry) =>
   natural.compare(a.fileName, b.fileName) ||
@@ -627,6 +721,12 @@ async function runArchiveWorker() {
     baseReserved = false,
     availableBytes = settings.maxDecodedBytes;
   const residentBytes = () => (baseReserved ? initialReserved : 0) + extraReserved;
+  for (const variant of data.cachedVariants) {
+    const key = `${variant.pageId}-${variant.width}`;
+    variants.set(key, variant);
+    variantCosts.set(key, variant.bytes);
+    extraReserved += variant.bytes;
+  }
   const imageOptions = { limitInputPixels: settings.maxInputPixels, failOn: 'error' } as const;
   const bytes = async (entry: IndexedEntry, maximum = settings.maxEntryBytes): Promise<Buffer> => {
     const archive = zip;
@@ -731,7 +831,7 @@ async function runArchiveWorker() {
       const targetWidth = Math.min(width, outputWidth),
         targetHeight = Math.max(1, Math.round((height * targetWidth) / width));
       estimatedBytes += targetWidth * targetHeight * 4;
-      initialReserved += targetWidth * (targetHeight + 1) * SURFACE_BYTES;
+      if (!data.tileCache) initialReserved += targetWidth * (targetHeight + 1) * SURFACE_BYTES;
       const depthBytes: Record<string, number> = {
         uchar: 1,
         char: 1,
@@ -803,6 +903,112 @@ async function runArchiveWorker() {
       variants.delete(key);
       extraReserved -= variantCosts.get(key) ?? 0;
       variantCosts.delete(key);
+    }
+    if (data.tileCache) {
+      if (Math.ceil(target / 1024) * Math.ceil(height / 1024) > 10000)
+        throw new Error('Page exceeds the tile manifest limit');
+      const workspace = inputCosts.get(index);
+      if (workspace === undefined || extraReserved + workspace > availableBytes)
+        throw new DeferredDecodeError('Tile generation workspace exceeds available reader budget');
+      const identity = { sourceRevision: data.sourceRevision, pageId: page.id, width: target };
+      const temporary = path.join(data.directory, `t-${randomUUID().replaceAll('-', '')}`);
+      await fs.mkdir(temporary, { recursive: true });
+      try {
+        const start = performance.now();
+        const input = await bytes(entry);
+        const inputMs = performance.now() - start,
+          imageStart = performance.now();
+        const base = path.join(temporary, 'p');
+        const info = await sharp(input, imageOptions)
+          .rotate()
+          .resize({ width: target, withoutEnlargement: true })
+          .png({ compressionLevel: 1 })
+          .tile({
+            size: 1024,
+            overlap: 1,
+            depth: 'one',
+            skipBlanks: -1,
+            background: { r: 0, g: 0, b: 0, alpha: 0 },
+          })
+          .toFile(base);
+        if (info.width !== target || !positive(info.height) || Math.abs(info.height - height) > 1)
+          throw new Error('Prepared tile dimensions are invalid');
+        const levels = (await fs.readdir(`${base}_files`, { withFileTypes: true })).filter(
+          (e) => e.isDirectory() && /^\d+$/.test(e.name),
+        );
+        if (levels.length !== 1 || !levels[0])
+          throw new Error('Expected one full-resolution tile level');
+        const level = path.join(`${base}_files`, levels[0].name),
+          tiles: PreparedTile[] = [];
+        for (let top = 0; top < info.height; top += 1024)
+          for (let left = 0; left < target; left += 1024) {
+            const width = Math.min(1024, target - left),
+              tileHeight = Math.min(1024, info.height - top),
+              offsetX = left ? 1 : 0,
+              offsetY = top ? 1 : 0;
+            const file = `${left / 1024}_${top / 1024}.png`,
+              tilePath = path.join(level, file),
+              handle = await fs.open(tilePath, 'r');
+            try {
+              const stat = await handle.stat(),
+                header = Buffer.alloc(24);
+              await handle.read(header, 0, 24, 0);
+              const encodedWidth = width + offsetX + (left + width < target ? 1 : 0),
+                encodedHeight = tileHeight + offsetY + (top + tileHeight < info.height ? 1 : 0);
+              if (
+                !stat.isFile() ||
+                !positive(stat.size) ||
+                header.readUInt32BE(16) !== encodedWidth ||
+                header.readUInt32BE(20) !== encodedHeight
+              )
+                throw new Error('Tile output is incomplete');
+              tiles.push({
+                index: tiles.length,
+                file,
+                left,
+                top,
+                width,
+                height: tileHeight,
+                encodedWidth,
+                encodedHeight,
+                offsetX,
+                offsetY,
+                bytes: stat.size,
+                sha256: await fileDigest(handle),
+              });
+            } finally {
+              await handle.close();
+            }
+          }
+        const manifest = JSON.stringify(tiles),
+          metadataBytes = Buffer.byteLength(manifest);
+        if (extraReserved + metadataBytes * 2 > availableBytes)
+          throw new DeferredDecodeError('Tile metadata exceeds reader budget');
+        await fs.writeFile(path.join(level, 'manifest.json'), manifest, 'utf8');
+        await assertSource(data.filePath, data.source);
+        const destination = tileDirectory(data.directory, identity);
+        await fs.rm(destination, { recursive: true, force: true });
+        await fs.rename(level, destination);
+        const variant: PreparedPage = {
+          index,
+          ...identity,
+          height: info.height,
+          bytes: metadataBytes,
+          sha256: createHash('sha256').update(manifest).digest('hex'),
+          tiles,
+        };
+        variants.set(key, variant);
+        variantCosts.set(key, metadataBytes);
+        extraReserved += metadataBytes;
+        return data.diagnostics
+          ? {
+              ...variant,
+              timing: { inputMs, imageMs: performance.now() - imageStart, cacheHit: false },
+            }
+          : variant;
+      } finally {
+        await fs.rm(temporary, { recursive: true, force: true });
+      }
     }
     const extraCost = target === page.targetWidth ? 0 : target * (height + 1) * SURFACE_BYTES,
       workspace = inputCosts.get(index);
@@ -962,6 +1168,7 @@ export function createCbzReader(
   const sessions = new Map<string, ArchiveSession>(),
     catalogs = new Map<string, ArchiveCatalog>(),
     closing = new Map<string, Promise<void>>(),
+    closingCatalogs = new Map<string, string>(),
     stopping = new Map<string, Promise<number>>(),
     reservations = new Map<string, number>(),
     renderReservations = new Map<string, number>();
@@ -1101,38 +1308,102 @@ export function createCbzReader(
     if (!active(id, session)) throw new Error('Chapter was released or replaced');
   };
   protocol.handle(SCHEME, async (request) => {
-    const url = new URL(request.url),
-      match = /^\/([0-9a-f-]{36})\/(\d+)-(\d+)\.png$/.exec(url.pathname);
+    const url = new URL(request.url);
+    // Tile authority follows the catalog, not an evicted archive worker. No path is supplied by the screen.
+    if (url.hostname === 'tile') {
+      const match = /^\/([0-9a-f-]{36})\/([0-9a-f-]{36})\/([0-9a-f]{64})-(\d+)\/(\d+)\.png$/.exec(
+        url.pathname,
+      );
+      const catalog = match?.[1] ? catalogs.get(match[1]) : undefined;
+      const entry = catalog?.entries.find((entry) => entry.id === match?.[2]);
+      const variant =
+        match && catalog
+          ? catalog.cachedVariants.get(`${match[2]}:${match[3]}:${match[4]}`)
+          : undefined;
+      const tile = match ? variant?.tiles?.[Number(match[5])] : undefined;
+      if (request.method !== 'GET' || !catalog || !entry?.source || !variant || !tile)
+        return new Response('Tile unavailable', { status: 404 });
+      let file: FileHandle | undefined;
+      try {
+        assertCatalog(catalog);
+        await assertSource(entry.filePath, entry.source);
+        file = await fs.open(
+          path.join(
+            tileDirectory(
+              path.join(
+                runtimeDirectory,
+                `catalog-${catalog.id}`,
+                `e-${entry.id.replaceAll('-', '')}`,
+              ),
+              variant,
+            ),
+            tile.file,
+          ),
+          'r',
+        );
+        const info = await file.stat();
+        if (!info.isFile() || info.size !== tile.bytes || (await fileDigest(file)) !== tile.sha256)
+          throw new Error('Cached tile integrity failed');
+        assertCatalog(catalog);
+        if (
+          catalog.cachedVariants.get(`${entry.id}:${variant.pageId}:${variant.width}`) !== variant
+        )
+          throw new Error('Cached tile was replaced');
+        const response = new Response(cachedBody(file, tile), {
+          headers: {
+            'Content-Type': 'image/png',
+            'Content-Length': String(tile.bytes),
+            'Cache-Control': 'no-store',
+            'Access-Control-Allow-Origin': 'null',
+          },
+        });
+        file = undefined;
+        return response;
+      } catch {
+        return new Response('Tile unavailable', { status: 404 });
+      } finally {
+        await file?.close();
+      }
+    }
+    const match = /^\/([0-9a-f-]{36})\/(\d+)-(\d+)(?:\.png|\/(\d+)\.png)$/.exec(url.pathname);
     const session = match?.[1] ? sessions.get(match[1]) : undefined;
     const index = match ? Number(match[2]) : -1,
       width = match ? Number(match[3]) : -1;
     const variant = session?.ready.get(`${index}-${width}`);
+    const tile = match?.[4] !== undefined ? variant?.tiles?.[Number(match[4])] : undefined;
     if (
       request.method !== 'GET' ||
       url.hostname !== 'page' ||
       !session ||
       !variant ||
       !match?.[1] ||
-      !active(match[1], session)
+      !active(match[1], session) ||
+      (match[4] !== undefined ? !tile : !!variant.tiles)
     )
       return new Response('Page unavailable', { status: 404 });
     let file: FileHandle | undefined;
     try {
-      file = await fs.open(cacheFile(session.directory, variant), 'r');
+      const payload = tile ?? variant;
+      file = await fs.open(
+        tile
+          ? path.join(tileDirectory(session.directory, variant), tile.file)
+          : cacheFile(session.directory, variant),
+        'r',
+      );
       const stat = await file.stat();
       if (
         !stat.isFile() ||
-        stat.size !== variant.bytes ||
-        (await fileDigest(file)) !== variant.sha256
+        stat.size !== payload.bytes ||
+        (await fileDigest(file)) !== payload.sha256
       )
         throw new Error('Cached page integrity failed');
       if (!active(match[1], session) || session.ready.get(`${index}-${width}`) !== variant)
         throw new Error('Page token was released');
       // Stream the same verified descriptor, not a second pathname lookup.
-      const response = new Response(cachedBody(file, variant), {
+      const response = new Response(cachedBody(file, payload), {
         headers: {
           'Content-Type': 'image/png',
-          'Content-Length': String(variant.bytes),
+          'Content-Length': String(payload.bytes),
           'Cache-Control': 'no-store',
           // loadFile workers have an opaque origin; page tokens remain the authority.
           'Access-Control-Allow-Origin': 'null',
@@ -1157,16 +1428,20 @@ export function createCbzReader(
     await (stopping.get(id) ?? session.worker.terminate());
     stopping.delete(id);
     reservations.delete(id); // Keep the estimate held until the worker genuinely stops.
-    await fs.rm(session.directory, { recursive: true, force: true });
+    if (!session.tileCache || !catalogs.has(session.catalogId))
+      await fs.rm(session.directory, { recursive: true, force: true });
   };
   const release = (id: string) => {
     const previous = closing.get(id);
     if (previous) return previous;
+    const catalogId = sessions.get(id)?.catalogId;
+    if (catalogId) closingCatalogs.set(id, catalogId);
     const task = closeSession(id);
     closing.set(id, task);
     void task
       .finally(() => {
         if (closing.get(id) === task) closing.delete(id);
+        closingCatalogs.delete(id);
       })
       .catch(() => {});
     return task;
@@ -1177,9 +1452,20 @@ export function createCbzReader(
     catalogs.delete(id); // Retire authorization before awaiting workers or queued opens.
     scheduler.cancel(id);
     await Promise.allSettled(
-      [...sessions].filter(([, session]) => session.catalogId === id).map(([key]) => release(key)),
+      [...sessions]
+        .filter(([, session]) => session.catalogId === id)
+        .map(([key]) => release(key))
+        .concat(
+          [...closing].filter(([key]) => closingCatalogs.get(key) === id).map(([, task]) => task),
+        ),
     );
     await Promise.allSettled([...catalog.requests.values()].map((request) => request.task));
+    reservations.delete(id);
+    if (catalog.options.tileCache)
+      await fs.rm(path.join(runtimeDirectory, `catalog-${catalog.id}`), {
+        recursive: true,
+        force: true,
+      });
   };
   const assertCatalog = (catalog: ArchiveCatalog) => {
     if (disposed || window.isDestroyed() || catalogs.get(catalog.id) !== catalog)
@@ -1214,6 +1500,7 @@ export function createCbzReader(
       entries,
       options: { ...options },
       requests: new Map(),
+      cachedVariants: new Map(),
     };
     if (disposed || window.isDestroyed()) throw new Error('Reader closed');
     // A new authorized Open may raise the limit, but never shrink it under live
@@ -1240,7 +1527,9 @@ export function createCbzReader(
       await assertSource(filePath, source);
       assertCatalog(catalog);
       id = randomUUID();
-      directory = path.join(runtimeDirectory, `reader-${id}`);
+      directory = options.tileCache
+        ? path.join(runtimeDirectory, `catalog-${catalog.id}`, `e-${entry.id.replaceAll('-', '')}`)
+        : path.join(runtimeDirectory, `reader-${id}`);
       await fs.mkdir(directory, { recursive: true });
       if (disposed || catalogs.get(catalog.id) !== catalog) {
         await fs.rm(directory, { recursive: true, force: true });
@@ -1257,6 +1546,12 @@ export function createCbzReader(
         source,
         sourceRevision,
         diagnostics,
+        tileCache: options.tileCache === true,
+        cachedVariants: options.tileCache
+          ? [...catalog.cachedVariants.entries()]
+              .filter(([key]) => key.startsWith(`${entry.id}:`))
+              .map(([, variant]) => variant)
+          : [],
         settings: {
           maxArchiveEntries: 10000,
           maxEntryBytes: 128 * 1048576,
@@ -1360,6 +1655,7 @@ export function createCbzReader(
       }
       const sessionId = id;
       const session: ArchiveSession = {
+        tileCache: options.tileCache === true,
         catalogId: catalog.id,
         entryId: entry.id,
         worker,
@@ -1390,7 +1686,8 @@ export function createCbzReader(
     } catch (error) {
       if (id) await release(id).catch(() => {});
       if (id && !sessions.has(id) && !closing.has(id)) reservations.delete(id);
-      if (directory) await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
+      if (directory && (!options.tileCache || !catalogs.has(catalog.id)))
+        await fs.rm(directory, { recursive: true, force: true }).catch(() => {});
       return failure(error);
     }
   };
@@ -1456,6 +1753,7 @@ export function createCbzReader(
           renderWidth: options.renderWidth,
           maxDecodeWidth: options.maxDecodeWidth,
           maxDecodedMB: options.maxDecodedMB,
+          ...(options.tileCache !== undefined ? { tileCache: options.tileCache } : {}),
         };
         const { catalog, entry } = await authorize(selected, preparation);
         authorized = catalog;
@@ -1506,7 +1804,8 @@ export function createCbzReader(
         !openOptions(options) ||
         !workPriority(priority) ||
         options.maxDecodeWidth !== catalog.options.maxDecodeWidth ||
-        options.maxDecodedMB !== catalog.options.maxDecodedMB
+        options.maxDecodedMB !== catalog.options.maxDecodedMB ||
+        options.tileCache !== catalog.options.tileCache
       )
         return { ok: false, error: 'Invalid or unauthorized chapter settings' };
       return readChapter(catalog, entry, options, priority);
@@ -1593,6 +1892,19 @@ export function createCbzReader(
             )
               return accepted;
             session.ready.set(key, variant);
+            if (variant.tiles) {
+              const previous = catalog.cachedVariants.get(
+                `${session.entryId}:${variant.pageId}:${variant.width}`,
+              );
+              catalog.cachedVariants.set(
+                `${session.entryId}:${variant.pageId}:${variant.width}`,
+                variant,
+              );
+              reservations.set(
+                catalog.id,
+                (reservations.get(catalog.id) ?? 0) - (previous?.bytes ?? 0) + variant.bytes,
+              );
+            }
             return variant;
           });
           session.pendingVariants.set(key, task);
@@ -1617,6 +1929,25 @@ export function createCbzReader(
           height: variant.height,
           url: `${SCHEME}://page/${id}/${index}-${variant.width}.png`,
           budget: budget(),
+          ...(variant.tiles
+            ? {
+                catalogId: session.catalogId,
+                entryId: session.entryId,
+                tiles: variant.tiles.map((tile) => ({
+                  index: tile.index,
+                  left: tile.left,
+                  top: tile.top,
+                  width: tile.width,
+                  height: tile.height,
+                  encodedWidth: tile.encodedWidth,
+                  encodedHeight: tile.encodedHeight,
+                  offsetX: tile.offsetX,
+                  offsetY: tile.offsetY,
+                  bytes: tile.bytes,
+                  url: `${SCHEME}://tile/${session.catalogId}/${session.entryId}/${page.id}-${variant.width}/${tile.index}.png`,
+                })),
+              }
+            : {}),
         };
       } catch (error) {
         return failure(error);

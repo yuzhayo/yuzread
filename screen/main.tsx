@@ -146,7 +146,32 @@ async function start() {
     typeof v.renderWidth === 'number' &&
     typeof v.maxDecodeWidth === 'number' &&
     typeof v.maxDecodedMB === 'number' &&
-    picker(v.picker);
+    picker(v.picker) &&
+    (v.tileCache === undefined || typeof v.tileCache === 'boolean');
+  const preparedTiles = (v: unknown) =>
+    v === undefined ||
+    (Array.isArray(v) &&
+      v.length > 0 &&
+      v.length <= 10000 &&
+      v.every(
+        (tile: unknown) =>
+          isObject(tile) &&
+          count(tile.index) &&
+          count(tile.left) &&
+          count(tile.top) &&
+          positive(tile.width) &&
+          tile.width <= 1024 &&
+          positive(tile.height) &&
+          tile.height <= 1024 &&
+          positive(tile.encodedWidth) &&
+          tile.encodedWidth <= 1026 &&
+          positive(tile.encodedHeight) &&
+          tile.encodedHeight <= 1026 &&
+          (tile.offsetX === 0 || tile.offsetX === 1) &&
+          (tile.offsetY === 0 || tile.offsetY === 1) &&
+          positive(tile.bytes) &&
+          typeof tile.url === 'string',
+      ));
   const result = (v: unknown): v is Result =>
     isObject(v) && (v.ok === true || (v.ok === false && typeof v.error === 'string'));
   const diagnostic = (v: unknown): v is DiagnosticRecord =>
@@ -240,7 +265,10 @@ async function start() {
               v.index >= 0 &&
               positive(v.requestedWidth) &&
               positive(v.width) &&
-              positive(v.height))),
+              positive(v.height) &&
+              preparedTiles(v.tiles) &&
+              (v.tiles === undefined ||
+                (typeof v.catalogId === 'string' && typeof v.entryId === 'string')))),
       ),
       { ok: false, error: 'Capability is unavailable' },
     ),

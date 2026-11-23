@@ -8,14 +8,20 @@ import {
   WebGLRenderer,
   WebWorkerAdapter,
 } from 'pixi.js';
-import type { ReaderPreparedPage, Result } from '../../../ShellHost.js';
+import type { ReaderPreparedPage, ReaderPreparedTile, Result } from '../../../ShellHost.js';
 import type {
   PixiInput,
   PixiOutput,
   PixiPageBox,
   PixiView,
 } from './BodyReaderPixiWorkerContract.js';
-import { advanceMomentum, clampMomentum, momentumImpulse } from './BodyReaderPixiWorkerPolicy.ts';
+import {
+  advanceMomentum,
+  advanceRenderDeadline,
+  tileInViewport,
+  clampMomentum,
+  momentumImpulse,
+} from './BodyReaderPixiWorkerPolicy.ts';
 
 // CONFIG AND CONTRACT — a reader-owned worker, not DOM/Node/IPC code.
 const MB = 1048576;
@@ -52,6 +58,8 @@ const validBox = (v: unknown): v is PixiPageBox =>
   finite(v.width, 0.1, 65536) &&
   finite(v.height, 0.1);
 function validPage(v: unknown): v is ReaderPreparedPage {
+  if (!record(v)) return false;
+  const { width, height } = v;
   return (
     record(v) &&
     v.ok === true &&
@@ -64,11 +72,48 @@ function validPage(v: unknown): v is ReaderPreparedPage {
     v.sourceRevision.length <= 256 &&
     integer(v.requestedWidth) &&
     finite(v.requestedWidth, 1, 8192) &&
-    integer(v.width) &&
-    finite(v.width, 1, 8192) &&
-    integer(v.height) &&
-    finite(v.height, 1, 1e9) &&
-    v.url === `yuzread-page://page/${v.id}/${v.index}-${v.width}.png`
+    integer(width) &&
+    finite(width, 1, 8192) &&
+    integer(height) &&
+    finite(height, 1, 1e9) &&
+    v.url === `yuzread-page://page/${v.id}/${v.index}-${v.width}.png` &&
+    (v.tiles === undefined ||
+      (Array.isArray(v.tiles) &&
+        typeof v.catalogId === 'string' &&
+        /^[0-9a-f-]{36}$/.test(v.catalogId) &&
+        typeof v.entryId === 'string' &&
+        /^[0-9a-f-]{36}$/.test(v.entryId) &&
+        /^[0-9a-f]{64}$/.test(v.pageId) &&
+        v.tiles.length > 0 &&
+        v.tiles.length <= 10000 &&
+        v.tiles.length === Math.ceil(width / 1024) * Math.ceil(height / 1024) &&
+        v.tiles.every(
+          (tile: unknown, index: number) =>
+            record(tile) &&
+            integer(tile.index) &&
+            integer(tile.left) &&
+            integer(tile.top) &&
+            tile.index === index &&
+            tile.left === (index % Math.ceil(width / 1024)) * 1024 &&
+            tile.top === Math.floor(index / Math.ceil(width / 1024)) * 1024 &&
+            finite(tile.width, 1, 1024) &&
+            finite(tile.height, 1, 1024) &&
+            tile.width === Math.min(1024, width - tile.left) &&
+            tile.height === Math.min(1024, height - tile.top) &&
+            finite(tile.encodedWidth, 1, 1026) &&
+            finite(tile.encodedHeight, 1, 1026) &&
+            integer(tile.offsetX) &&
+            integer(tile.offsetY) &&
+            tile.offsetX === (tile.left ? 1 : 0) &&
+            tile.offsetY === (tile.top ? 1 : 0) &&
+            tile.encodedWidth ===
+              tile.width + tile.offsetX + (tile.left + tile.width < width ? 1 : 0) &&
+            tile.encodedHeight ===
+              tile.height + tile.offsetY + (tile.top + tile.height < height ? 1 : 0) &&
+            finite(tile.bytes, 1, 128 * 1048576) &&
+            tile.url ===
+              `yuzread-page://tile/${v.catalogId}/${v.entryId}/${v.pageId}-${v.width}/${tile.index}.png`,
+        )))
   );
 }
 function validInput(v: unknown): v is PixiInput {
@@ -78,7 +123,10 @@ function validInput(v: unknown): v is PixiInput {
       return (
         (v.canvas === null || v.canvas instanceof OffscreenCanvas) &&
         validView(v.view) &&
-        finite(v.speed, 0.1, 10)
+        finite(v.speed, 0.1, 10) &&
+        finite(v.maxFPS, 10, 240) &&
+        Number.isInteger(v.maxFPS) &&
+        finite(v.tileMemoryMB, 16, 512)
       );
     case 'layout':
       return (
@@ -93,6 +141,8 @@ function validInput(v: unknown): v is PixiInput {
       return (
         integer(v.request) &&
         validPage(v.page) &&
+        (v.warm === undefined ||
+          (record(v.warm) && finite(v.warm.top, 0) && finite(v.warm.height, 1))) &&
         ['demand', 'visible', 'background'].includes(String(v.priority))
       );
     case 'release':
@@ -129,7 +179,8 @@ const failure = (error: unknown): Result => ({
   ...(error instanceof SurfaceError && error.code ? { code: error.code } : {}),
 });
 const reply = (value: PixiOutput) => self.postMessage(value);
-const pageKey = (p: ReaderPreparedPage) => `${p.id}:${p.index}`;
+const pageKey = (p: ReaderPreparedPage) =>
+  p.tiles ? `${p.catalogId}:${p.entryId}:${p.index}` : `${p.id}:${p.index}`;
 
 // RESOURCES — bitmaps/textures are the accepted page surfaces, never duplicate DOM images.
 interface Page {
@@ -138,11 +189,41 @@ interface Page {
   node: Container;
   bitmaps: ImageBitmap[];
   textures: Texture[];
+  tiles: { sprite: Sprite; left: number; top: number; width: number; height: number }[];
   box?: PixiPageBox;
   documentId: string;
   padding: number;
   accounted: boolean;
+  cache?: CachedTile[];
+  pins: Set<number>;
+  retired?: boolean;
 }
+interface CachedTile {
+  source: ReaderPreparedTile;
+  sprite: Sprite | null;
+  texture: Texture | null;
+  bitmap: ImageBitmap | null;
+  used: number;
+  cost: number;
+  failed: boolean;
+}
+let cachedBytes = 0,
+  cacheReservation = 0,
+  cacheStaging = 0,
+  tileLimit = 128 * MB,
+  cacheBusy = false,
+  activeTileChapter: string | null = null,
+  cacheTask: Promise<void> = Promise.resolve();
+// At most two full-size GPU uploads per admitted frame, including sampling borders.
+const CACHE_UPLOAD_LIMIT = 2 * 1026 * 1026 * 4;
+let cacheUploadBytes = CACHE_UPLOAD_LIMIT;
+let demandY: number | null = null;
+const warmWaiters: {
+  page: Page;
+  indices: number[];
+  resolve: () => void;
+  reject: (error: Error) => void;
+}[] = [];
 DOMAdapter.set(WebWorkerAdapter);
 const stage = new Container(),
   pages = new Map<string, Page>();
@@ -154,12 +235,16 @@ let initializing: Promise<void> | null = null,
   stagingBytes = 0,
   rendererReady = false,
   paddingBytes = 0;
+let visualDirty = true,
+  maxFPS = 60,
+  renderDeadline = 0;
 let resourceId = 0,
   resourceChain: Promise<void> = Promise.resolve();
 const resourceWaiters = new Map<number, (value: Result) => void>();
 const baseline = () =>
   8 * MB +
   paddingBytes +
+  Math.max(cacheReservation, cachedBytes + cacheStaging) +
   (renderer && view
     ? Math.ceil(view.width * view.ratio) * Math.ceil(view.height * view.ratio) * 12 + 4 * MB
     : 0);
@@ -177,6 +262,13 @@ function reserve(bytes: number): Promise<void> {
   return task;
 }
 function destroyPage(page: Page) {
+  if (page.cache) for (const tile of page.cache) evictTile(tile);
+  for (let n = warmWaiters.length - 1; n >= 0; n--)
+    if (warmWaiters[n]?.page === page) {
+      warmWaiters[n]?.reject(new SurfaceError('Page released', 'cancelled'));
+      warmWaiters.splice(n, 1);
+    }
+  if (page.node.parent === stage && page.node.visible) visualDirty = true;
   if (page.accounted) {
     paddingBytes -= page.padding;
     page.accounted = false;
@@ -197,14 +289,32 @@ function visible(page: Page) {
     box.top < y + view.height
   );
 }
+const boxOnScreen = (box: PixiPageBox) =>
+  !!view &&
+  tileInViewport(
+    box.left - view.x,
+    box.top - y,
+    box.width,
+    box.height,
+    view.width,
+    view.height,
+    1 / view.ratio,
+  );
 const releases = new Map<number, string>();
 let activeChapter: string | null = null;
 function releasePages() {
   for (const [request, chapter] of releases) {
-    if (activeChapter === chapter) continue;
-    if ([...pages.values()].some((page) => page.chapter === chapter && visible(page))) continue;
+    if (activeChapter === chapter || activeTileChapter === chapter) continue;
+    if (
+      [...pages.values()].some((page) => page.chapter === chapter && !page.cache && visible(page))
+    )
+      continue;
     for (const [key, page] of pages)
       if (page.chapter === chapter) {
+        if (page.cache && view?.documentId === page.documentId && page.box) {
+          page.retired = true;
+          continue;
+        }
         pages.delete(key);
         destroyPage(page);
       }
@@ -227,10 +337,15 @@ let frame: number | null = null,
 let upload: (() => void) | null = null;
 let speed = 1;
 let renderOutstanding = 0;
+let blockedFrames = 0;
+let tileIssue = false;
 interface RenderSummary {
   revision: number;
   pages: number;
   visiblePages: number;
+  residentTiles: number;
+  residentBytes: number;
+  blockedFrames: number;
 }
 let renderSummary: RenderSummary | null = null;
 let sentRender: RenderSummary | null = null;
@@ -240,7 +355,10 @@ function publishRender() {
     sentRender &&
     sentRender.revision === renderSummary.revision &&
     sentRender.pages === renderSummary.pages &&
-    sentRender.visiblePages === renderSummary.visiblePages
+    sentRender.visiblePages === renderSummary.visiblePages &&
+    sentRender.residentTiles === renderSummary.residentTiles &&
+    sentRender.residentBytes === renderSummary.residentBytes &&
+    sentRender.blockedFrames === renderSummary.blockedFrames
   )
     return;
   renderOutstanding = ++serial;
@@ -261,6 +379,13 @@ function schedule() {
 function tick(time: number) {
   frame = null;
   if (disposed) return;
+  const clock = advanceRenderDeadline(time, renderDeadline, maxFPS);
+  if (!clock.ready) {
+    schedule();
+    return;
+  }
+  renderDeadline = clock.deadline;
+  cacheUploadBytes = 0;
   if (moving()) {
     const next = advanceMomentum(
       velocity,
@@ -269,10 +394,28 @@ function tick(time: number) {
       speed,
     );
     const desired = y + next.distance;
-    y = Math.max(0, Math.min(maxY, desired));
-    velocity = next.velocity;
-    target = next.target;
-    if (Math.abs(y - desired) > 0.001) velocity = target = 0;
+    let nextY = Math.max(0, Math.min(maxY, desired));
+    demandY = nextY;
+    const blocked = missingViewport(nextY);
+    if (blocked) {
+      blockedFrames++;
+      startCache();
+      nextY = y;
+      if (
+        [...pages.values()].some((page) =>
+          page.cache?.some((tile) => tile.failed && tileVisible(page, tile, demandY ?? y)),
+        )
+      )
+        velocity = target = 0;
+    }
+    if (nextY !== y) visualDirty = true;
+    y = nextY;
+    // Waiting for a tile must not consume the remaining momentum or cause a catch-up jump.
+    if (!blocked) {
+      velocity = next.velocity;
+      target = next.target;
+    }
+    if ((desired < 0 || desired > maxY) && Math.abs(y - desired) > 0.001) velocity = target = 0;
     positionDirty = true;
   }
   lastTime = moving() ? time : null;
@@ -287,35 +430,445 @@ function tick(time: number) {
     renderer.screen.height === view.height &&
     renderer.resolution === view.ratio
   ) {
-    let count = 0;
-    for (const page of pages.values()) {
-      page.node.visible = visible(page);
-      if (page.node.visible && page.box) {
-        count++;
-        page.node.position.set(page.box.left - view.x, page.box.top - y);
-        page.node.scale.set(
-          page.box.width / page.source.width,
-          page.box.height / page.source.height,
-        );
+    let count = renderSummary?.visiblePages ?? 0;
+    if (visualDirty && !missingViewport(y)) {
+      count = 0;
+      for (const page of pages.values()) {
+        page.node.visible = visible(page);
+        if (page.node.visible && page.box) {
+          count++;
+          const left = page.box.left - view.x,
+            top = page.box.top - y;
+          const scaleX = page.box.width / page.source.width,
+            scaleY = page.box.height / page.source.height;
+          page.node.position.set(left, top);
+          page.node.scale.set(scaleX, scaleY);
+          for (const tile of page.tiles)
+            tile.sprite.visible = tileInViewport(
+              left + tile.left * scaleX,
+              top + tile.top * scaleY,
+              tile.width * scaleX,
+              tile.height * scaleY,
+              view.width,
+              view.height,
+              1 / view.ratio,
+            );
+          if (page.cache)
+            for (const tile of page.cache)
+              if (tile.sprite) {
+                const source = tile.source;
+                tile.sprite.visible = tileInViewport(
+                  left + source.left * scaleX,
+                  top + source.top * scaleY,
+                  source.width * scaleX,
+                  source.height * scaleY,
+                  view.width,
+                  view.height,
+                  1 / view.ratio,
+                );
+                if (tile.sprite.visible) tile.used = time;
+              }
+        }
+      }
+      renderer.render({ container: stage });
+      visualDirty = false;
+      if (tileIssue) {
+        tileIssue = false;
+        reply({ version: 1, kind: 'tile-error', error: '' });
       }
     }
-    renderer.render({ container: stage });
-    renderSummary = { revision: view.revision, pages: pages.size, visiblePages: count };
+    renderSummary = {
+      revision: visualDirty ? (renderSummary?.revision ?? 0) : view.revision,
+      pages: pages.size,
+      visiblePages: count,
+      residentTiles: [...pages.values()].reduce(
+        (sum, page) =>
+          sum + (page.cache?.filter((tile) => !!tile.sprite).length ?? page.tiles.length),
+        0,
+      ),
+      residentBytes: cachedBytes,
+      blockedFrames,
+    };
     publishRender();
   }
   publishPosition();
   releasePages();
+  startCache();
   if (moving() || upload) schedule();
 }
 function stop(offset: number) {
-  y = Math.max(0, Math.min(maxY, offset));
+  const nextY = Math.max(0, Math.min(maxY, offset));
+  if (nextY !== y) visualDirty = true;
+  y = nextY;
+  demandY = null;
   velocity = target = 0;
   lastTime = null;
   positionDirty = true;
   schedule();
 }
 
-// GPU PREPARATION — one priority/FIFO page at a time, one bounded tile upload per frame.
+// TILE RESIDENCY — source files stay on disk; only visible/nearby decoded surfaces stay live.
+function evictTile(tile: CachedTile, keepTexture = false): Texture | null {
+  if (!tile.sprite) return null;
+  const retained = keepTexture ? tile.texture : null;
+  tile.sprite.destroy();
+  if (!keepTexture) tile.texture?.destroy(true);
+  tile.bitmap?.close();
+  cachedBytes -= tile.cost;
+  tile.sprite = null;
+  tile.texture = null;
+  tile.bitmap = null;
+  tile.cost = 0;
+  return retained;
+}
+function cachePriority(page: Page, tile: CachedTile, offset = demandY ?? y) {
+  if (page.pins.has(tile.source.index)) return 0;
+  if (!view || !page.box || page.documentId !== view.documentId) return 5;
+  const box = page.box,
+    sx = box.width / page.source.width,
+    sy = box.height / page.source.height,
+    source = tile.source;
+  const left = box.left - view.x + source.left * sx,
+    top = box.top - offset + source.top * sy,
+    width = source.width * sx,
+    height = source.height * sy;
+  if (tileInViewport(left, top, width, height, view.width, view.height, 1 / view.ratio)) return 0;
+  const lead = Math.max(view.height * 2, Math.min(view.height * 4, Math.abs(velocity) * 0.2));
+  const before = velocity >= 0 ? view.height : lead,
+    after = velocity >= 0 ? lead : view.height;
+  if (!tileInViewport(left, top + before, width, height, view.width, view.height + before + after))
+    return 5;
+  const center = top + height / 2;
+  return velocity >= 0 ? (center >= view.height ? 1 : 2) : center <= 0 ? 1 : 2;
+}
+function tileVisible(page: Page, tile: CachedTile, offset: number) {
+  if (!view || !page.box || page.documentId !== view.documentId) return false;
+  const box = page.box,
+    source = tile.source;
+  return tileInViewport(
+    box.left - view.x + (source.left * box.width) / page.source.width,
+    box.top - offset + (source.top * box.height) / page.source.height,
+    (source.width * box.width) / page.source.width,
+    (source.height * box.height) / page.source.height,
+    view.width,
+    view.height,
+    1 / view.ratio,
+  );
+}
+function checkTilePage(page: Page) {
+  if (disposed || pages.get(pageKey(page.source)) !== page)
+    throw new SurfaceError('Tile page released', 'cancelled');
+}
+function missingViewport(offset: number) {
+  for (const page of pages.values())
+    if (page.cache)
+      for (const tile of page.cache)
+        if (!tile.sprite && tileVisible(page, tile, offset)) return true;
+  return false;
+}
+function makeRoom(cost: number, priority: number, source: ReaderPreparedTile) {
+  let texture: Texture | null = null;
+  while (cachedBytes + cost > tileLimit) {
+    let victim: CachedTile | undefined,
+      best = -1,
+      reusableVictim = false;
+    for (const page of pages.values())
+      if (page.cache)
+        for (const tile of page.cache) {
+          if (!tile.sprite || page.pins.has(tile.source.index) || tileVisible(page, tile, y))
+            continue;
+          const rank = cachePriority(page, tile);
+          if (rank < 5 && rank <= priority && priority !== 0) continue;
+          const reusable =
+            !texture &&
+            rank === 5 &&
+            tile.texture?.source instanceof ImageSource &&
+            tile.texture.source.pixelWidth === source.encodedWidth &&
+            tile.texture.source.pixelHeight === source.encodedHeight;
+          // Equal distant victims have no lookahead role: prefer matching storage, then LRU.
+          // Visible and nearby victim priorities/order remain unchanged.
+          if (
+            !victim ||
+            rank > best ||
+            (rank === best &&
+              ((reusable && !reusableVictim) ||
+                (reusable === reusableVictim && tile.used < victim.used)))
+          ) {
+            victim = tile;
+            best = rank;
+            reusableVictim = reusable;
+          }
+        }
+    // Visible/warming tiles cannot be sacrificed to enforce a nominal pool size.
+    if (!victim) return { accepted: priority === 0, texture };
+    const compatible =
+      !texture &&
+      victim.texture?.source instanceof ImageSource &&
+      victim.texture.source.pixelWidth === source.encodedWidth &&
+      victim.texture.source.pixelHeight === source.encodedHeight;
+    // Only recycle an eviction already required by the existing policy. No spare pool or changed lookahead.
+    if (compatible) texture = evictTile(victim, true);
+    else evictTile(victim);
+  }
+  return { accepted: true, texture };
+}
+function settleWarm() {
+  for (let n = warmWaiters.length - 1; n >= 0; n--) {
+    const waiter = warmWaiters[n];
+    if (!waiter) continue;
+    if (waiter.indices.some((index) => waiter.page.cache?.[index]?.failed)) {
+      waiter.reject(new Error('Required tile is unavailable'));
+      warmWaiters.splice(n, 1);
+    } else if (waiter.indices.every((index) => !!waiter.page.cache?.[index]?.sprite)) {
+      waiter.resolve();
+      warmWaiters.splice(n, 1);
+    }
+  }
+}
+function startCache() {
+  if (cacheBusy || disposed || !rendererReady) return;
+  cacheTask = loadCache().catch((error) => {
+    stop(y);
+    tileIssue = true;
+    reply({
+      version: 1,
+      kind: 'tile-error',
+      error: error instanceof Error ? error.message : 'Tile loading failed',
+    });
+  });
+}
+async function loadCache() {
+  if (cacheBusy || disposed) return;
+  cacheBusy = true;
+  try {
+    while (!disposed) {
+      let chosen: { page: Page; tile: CachedTile; priority: number; distance: number } | undefined;
+      for (const page of pages.values())
+        if (page.cache)
+          for (const tile of page.cache) {
+            if (tile.sprite || tile.failed) continue;
+            const priority = cachePriority(page, tile);
+            const center = page.box
+              ? page.box.top +
+                ((tile.source.top + tile.source.height / 2) * page.box.height) /
+                  page.source.height -
+                (demandY ?? y)
+              : 0;
+            const distance = Math.abs(center - (view?.height ?? 0) / 2);
+            if (
+              priority < 5 &&
+              (!chosen ||
+                priority < chosen.priority ||
+                (priority === chosen.priority && distance < chosen.distance))
+            )
+              chosen = { page, tile, priority, distance };
+          }
+      if (!chosen) break;
+      const { page, tile, priority } = chosen,
+        source = tile.source,
+        cost = source.encodedWidth * source.encodedHeight * 8;
+      const room = makeRoom(cost, priority, source);
+      if (!room.accepted) {
+        room.texture?.destroy(true);
+        break;
+      }
+      activeTileChapter = page.chapter;
+      let bitmap: ImageBitmap | null = null,
+        texture: Texture | null = room.texture;
+      try {
+        checkTilePage(page);
+        cacheStaging = cost + source.bytes;
+        await reserve(baseline() + stagingBytes);
+        checkTilePage(page);
+        const response = await fetch(source.url, { signal: abort.signal, credentials: 'omit' });
+        if (!response.ok || Number(response.headers.get('content-length')) !== source.bytes)
+          throw new Error('Cached tile is unavailable');
+        const blob = await response.blob();
+        checkTilePage(page);
+        if (blob.size !== source.bytes) throw new Error('Cached tile bytes are incomplete');
+        bitmap = await createImageBitmap(blob, { imageOrientation: 'none' });
+        checkTilePage(page);
+        if (bitmap.width !== source.encodedWidth || bitmap.height !== source.encodedHeight)
+          throw new Error('Cached tile dimensions do not match');
+        const frame = new Rectangle(source.offsetX, source.offsetY, source.width, source.height);
+        if (texture) {
+          texture.frame.copyFrom(frame);
+          texture.orig.copyFrom(frame);
+          texture.updateUvs();
+        } else
+          texture = new Texture({
+            source: new ImageSource({
+              resource: bitmap,
+              autoGenerateMipmaps: false,
+              autoGarbageCollect: false,
+            }),
+            frame,
+          });
+        const created = texture,
+          current = renderer,
+          decoded = bitmap;
+        if (!current) throw new Error('Renderer closed');
+        const uploadBytes = source.encodedWidth * source.encodedHeight * 4;
+        const submit = () => {
+          checkTilePage(page);
+          if (room.texture) {
+            // Same dimensions preserve GPU storage; Pixi uploads the replacement with texSubImage2D.
+            // The old bitmap is closed at eviction; this single slot is covered by cacheStaging.
+            created.source.resource = decoded;
+            created.source.update();
+          } else current.texture.initSource(created.source);
+          cacheUploadBytes += uploadBytes;
+        };
+        if (cacheUploadBytes + uploadBytes <= CACHE_UPLOAD_LIMIT) submit();
+        else
+          await new Promise<void>((resolve, reject) => {
+            upload = () => {
+              try {
+                submit();
+                resolve();
+              } catch (error) {
+                reject(error);
+              }
+            };
+            schedule();
+          });
+        checkTilePage(page);
+        const sprite = new Sprite({ texture });
+        sprite.eventMode = 'none';
+        sprite.position.set(source.left, source.top);
+        page.node.addChild(sprite);
+        tile.sprite = sprite;
+        tile.texture = texture;
+        tile.bitmap = bitmap;
+        tile.cost = cost;
+        tile.used = performance.now();
+        cachedBytes += cost;
+        bitmap = null;
+        texture = null;
+        if (visible(page)) visualDirty = true;
+        settleWarm();
+        schedule();
+      } catch (error) {
+        if (error instanceof SurfaceError && error.code === 'deferred') {
+          texture?.destroy(true);
+          bitmap?.close();
+          for (let n = warmWaiters.length - 1; n >= 0; n--)
+            if (warmWaiters[n]?.page === page) {
+              warmWaiters[n]?.reject(error);
+              warmWaiters.splice(n, 1);
+            }
+          break;
+        }
+        texture?.destroy(true);
+        bitmap?.close();
+        tile.failed = true;
+        settleWarm();
+        if (!(error instanceof SurfaceError && error.code === 'cancelled')) throw error;
+      } finally {
+        activeTileChapter = null;
+        cacheStaging = 0;
+        if (!disposed) await reserve(baseline() + stagingBytes);
+        releasePages();
+      }
+    }
+  } finally {
+    cacheBusy = false;
+  }
+}
+async function prepareCached(message: Extract<PixiInput, { kind: 'prepare' }>) {
+  const source = message.page,
+    key = pageKey(source);
+  check(source.id);
+  await initializing;
+  if (!cacheReservation) {
+    // Reserve pool capacity before native background work starts, so streaming does not compete
+    // with the decoder's exclusive workspace grant for each tiny tile increase.
+    cacheReservation = tileLimit + 16 * MB;
+    try {
+      await reserve(baseline() + stagingBytes);
+    } catch (error) {
+      cacheReservation = 0;
+      throw error;
+    }
+  }
+  check(source.id);
+  let page = pages.get(key);
+  if (!page) {
+    if (!source.tiles) throw new Error('Missing cached tile manifest');
+    page = {
+      chapter: source.id,
+      source,
+      node: new Container(),
+      bitmaps: [],
+      textures: [],
+      tiles: [],
+      documentId: '',
+      padding: 0,
+      accounted: false,
+      pins: new Set(),
+      cache: source.tiles.map((tile) => ({
+        source: tile,
+        sprite: null,
+        texture: null,
+        bitmap: null,
+        used: 0,
+        cost: 0,
+        failed: false,
+      })),
+    };
+    page.node.visible = false;
+    pages.set(key, page);
+    stage.addChild(page.node);
+    const box = layout.get(key);
+    if (box && view) {
+      page.box = box;
+      page.documentId = view.documentId;
+    }
+  } else if (
+    page.source.pageId !== source.pageId ||
+    page.source.sourceRevision !== source.sourceRevision ||
+    page.source.width !== source.width ||
+    page.source.height !== source.height
+  )
+    throw new Error('Cached page identity changed');
+  page.chapter = source.id;
+  page.source = source;
+  page.retired = false;
+  if (source.tiles && page.cache)
+    for (const tile of page.cache) {
+      const updated = source.tiles[tile.source.index];
+      if (updated) tile.source = updated;
+      tile.failed = false;
+    }
+  await initializing;
+  check(source.id);
+  if (message.warm && page.cache) {
+    const warm = message.warm,
+      indices = page.cache
+        .filter(
+          (tile) =>
+            tile.source.top + tile.source.height > warm.top &&
+            tile.source.top < warm.top + warm.height,
+        )
+        .map((tile) => tile.source.index);
+    for (const index of indices) page.pins.add(index);
+    const waiting = new Promise<void>((resolve, reject) =>
+      warmWaiters.push({ page, indices, resolve, reject }),
+    );
+    startCache();
+    settleWarm();
+    try {
+      await waiting;
+    } finally {
+      for (const index of indices) page.pins.delete(index);
+    }
+  }
+  startCache();
+  schedule();
+  return { bitmapMs: 0, uploadMs: 0 };
+}
+
+// GPU PREPARATION — one priority/FIFO page at a time; legacy whole-PNG upload remains tile-bounded.
 const jobs: Extract<PixiInput, { kind: 'prepare' }>[] = [];
 let preparing = false;
 const cancelled = new Set<string>();
@@ -324,6 +877,7 @@ const check = (chapter: string) => {
 };
 async function prepare(message: Extract<PixiInput, { kind: 'prepare' }>) {
   const { page } = message;
+  if (page.tiles) return prepareCached(message);
   check(page.id);
   const key = pageKey(page),
     retained = pages.get(key);
@@ -353,6 +907,8 @@ async function prepare(message: Extract<PixiInput, { kind: 'prepare' }>) {
     node: new Container(),
     bitmaps: [],
     textures: [],
+    tiles: [],
+    pins: new Set(),
     documentId: '',
     padding: 0,
     accounted: false,
@@ -410,6 +966,7 @@ async function prepare(message: Extract<PixiInput, { kind: 'prepare' }>) {
         sprite.eventMode = 'none';
         sprite.position.set(left, top);
         entry.node.addChild(sprite);
+        entry.tiles.push({ sprite, left, top, width, height });
         await new Promise<void>((resolve, reject) => {
           upload = () => {
             try {
@@ -435,6 +992,8 @@ async function prepare(message: Extract<PixiInput, { kind: 'prepare' }>) {
       entry.box = box;
       entry.documentId = view.documentId;
     }
+    entry.node.visible = visible(entry);
+    if (entry.node.visible) visualDirty = true;
     schedule();
     return { bitmapMs, uploadMs };
   } catch (error) {
@@ -492,12 +1051,15 @@ async function resizeRenderer(next: PixiView) {
     view.ratio === next.ratio
   ) {
     renderer.resize(next.width, next.height, next.ratio);
+    visualDirty = true;
     schedule();
   }
 }
 async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   view = message.view;
   speed = message.speed;
+  maxFPS = message.maxFPS;
+  tileLimit = message.tileMemoryMB * MB;
   y = view.y;
   maxY = view.maxY;
   control = view.control;
@@ -548,6 +1110,8 @@ async function dispose() {
   const pendingUpload = upload;
   upload = null;
   pendingUpload?.();
+  for (const waiter of warmWaiters.splice(0))
+    waiter.reject(new SurfaceError('Reader closed', 'cancelled'));
   for (const job of jobs.splice(0))
     reply({
       version: 1,
@@ -556,7 +1120,7 @@ async function dispose() {
       result: { ok: false, code: 'cancelled', error: 'Reader closed' },
       timing: { bitmapMs: 0, uploadMs: 0 },
     });
-  await Promise.allSettled([initializing, pumpingTask, resourceChain]);
+  await Promise.allSettled([initializing, pumpingTask, cacheTask, resourceChain]);
   for (const page of pages.values()) destroyPage(page);
   pages.clear();
   stage.destroy({ children: true });
@@ -595,6 +1159,15 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
       });
   } else if (message.kind === 'layout' || message.kind === 'view') {
     if (view && message.view.revision <= view.revision) return;
+    if (
+      !view ||
+      view.documentId !== message.view.documentId ||
+      view.x !== message.view.x ||
+      view.width !== message.view.width ||
+      view.height !== message.view.height ||
+      view.ratio !== message.view.ratio
+    )
+      visualDirty = true;
     const changed = view?.documentId !== message.view.documentId;
     view = message.view;
     maxY = view.maxY;
@@ -603,6 +1176,21 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
       stop(view.y);
     }
     if (message.kind === 'layout') {
+      const nextLayout = new Map(message.pages.map((box) => [box.key, box]));
+      for (const [key, old] of layout)
+        if (!nextLayout.has(key) && boxOnScreen(old)) visualDirty = true;
+      for (const [key, box] of nextLayout) {
+        const old = layout.get(key);
+        if (
+          (!old ||
+            old.left !== box.left ||
+            old.top !== box.top ||
+            old.width !== box.width ||
+            old.height !== box.height) &&
+          (boxOnScreen(box) || (old && boxOnScreen(old)))
+        )
+          visualDirty = true;
+      }
       layout.clear();
       for (const box of message.pages) layout.set(box.key, box);
     }
@@ -611,6 +1199,10 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
       if (box) {
         page.box = box;
         page.documentId = view.documentId;
+      }
+      if (page.retired && page.documentId !== view.documentId) {
+        pages.delete(key);
+        destroyPage(page);
       }
     }
     if (
@@ -628,6 +1220,7 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
         }),
       );
     schedule();
+    startCache();
   } else if (message.kind === 'prepare') {
     if (jobs.length >= 8) {
       reply({
@@ -649,7 +1242,7 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
   } else if (message.kind === 'ack') {
     if (message.serial === outstanding) {
       outstanding = 0;
-      publishPosition();
+      if (positionDirty) schedule();
     }
     if (message.serial === renderOutstanding) {
       renderOutstanding = 0;
@@ -659,6 +1252,8 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
     control = message.control;
     maxY = message.maxY;
     if (message.kind === 'wheel') {
+      for (const page of pages.values())
+        if (page.cache) for (const tile of page.cache) tile.failed = false;
       target = clampMomentum(target + momentumImpulse(message.distance, speed), speed);
       lastTime ??= performance.now();
       schedule();
@@ -671,7 +1266,10 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
       schedule();
     } else if (message.kind === 'stop') stop(message.y);
     else if (message.kind === 'rebase') {
-      y = Math.max(0, Math.min(maxY, y + message.delta));
+      const nextY = Math.max(0, Math.min(maxY, y + message.delta));
+      if (nextY !== y) visualDirty = true;
+      y = nextY;
+      demandY = null;
       positionDirty = true;
       schedule();
     }

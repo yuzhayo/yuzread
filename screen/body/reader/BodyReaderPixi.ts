@@ -15,11 +15,14 @@ export interface ReaderPixiOptions {
   gpu: boolean;
   momentum: boolean;
   speed: number;
+  maxFPS: number;
+  tileMemoryMB: number;
   maxDecodedMB: number;
   getDocumentId(): string;
   getPages(): ReaderRenderPage[];
   canScroll(): boolean;
   onMotion(): void;
+  onIssue(error: string): void;
   reserve(owner: string, bytes: number, limit: number): Promise<Result>;
 }
 export class ReaderSurfaceError extends Error {
@@ -54,7 +57,13 @@ function validOutput(v: unknown): v is PixiOutput {
       );
     case 'rendered':
       return (
-        integer(v.serial) && integer(v.revision) && integer(v.pages) && integer(v.visiblePages)
+        integer(v.serial) &&
+        integer(v.revision) &&
+        integer(v.pages) &&
+        integer(v.visiblePages) &&
+        integer(v.residentTiles) &&
+        integer(v.residentBytes) &&
+        integer(v.blockedFrames)
       );
     case 'prepared':
       return (
@@ -84,6 +93,7 @@ function validOutput(v: unknown): v is PixiOutput {
         v.speed <= 10
       );
     case 'failed':
+    case 'tile-error':
       return typeof v.error === 'string';
     default:
       return false;
@@ -176,7 +186,9 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       .map((entry) => {
         const box = entry.image.getBoundingClientRect();
         return {
-          key: `${entry.page.id}:${entry.page.index}`,
+          key: entry.page.tiles
+            ? `${entry.page.catalogId}:${entry.page.entryId}:${entry.page.index}`
+            : `${entry.page.id}:${entry.page.index}`,
           left: box.left - bounds.left - view.clientLeft + view.scrollLeft,
           top: box.top - bounds.top - view.clientTop + view.scrollTop,
           width: box.width,
@@ -357,6 +369,9 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       canvas.dataset.pixiRevision = String(message.revision);
       canvas.dataset.pixiPages = String(message.pages);
       canvas.dataset.pixiVisiblePages = String(message.visiblePages);
+      canvas.dataset.pixiResidentTiles = String(message.residentTiles);
+      canvas.dataset.pixiResidentBytes = String(message.residentBytes);
+      canvas.dataset.pixiBlockedFrames = String(message.blockedFrames);
       if (message.visiblePages > 0) {
         canvas.dataset.readerPixi = 'ready';
         canvas.style.opacity = '1';
@@ -370,6 +385,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       pending.get(message.request)?.resolve({ bitmapMs: 0, uploadMs: 0 });
       pending.delete(message.request);
     } else if (message.kind === 'failed') fail(new Error(message.error));
+    else if (message.kind === 'tile-error') options.onIssue(message.error);
   }
   const workerError = (event: ErrorEvent) =>
     fail(new Error(event.message || 'Renderer worker failed'));
@@ -434,7 +450,15 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     positionCanvas();
   }
   post(
-    { version: 1, kind: 'init', canvas: offscreen, view: measure(), speed },
+    {
+      version: 1,
+      kind: 'init',
+      canvas: offscreen,
+      view: measure(),
+      speed,
+      maxFPS: options.maxFPS,
+      tileMemoryMB: options.tileMemoryMB,
+    },
     offscreen ? [offscreen] : [],
   );
   resize.observe(view);
@@ -472,9 +496,20 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     stop,
     syncLayout,
     close,
-    async preparePage(page: ReaderPreparedPage, priority: ReaderWorkPriority) {
+    async preparePage(
+      page: ReaderPreparedPage,
+      priority: ReaderWorkPriority,
+      warm?: { top: number; height: number },
+    ) {
       await ready;
-      return request((id) => ({ version: 1, kind: 'prepare', request: id, page, priority }));
+      return request((id) => ({
+        version: 1,
+        kind: 'prepare',
+        request: id,
+        page,
+        priority,
+        ...(warm ? { warm } : {}),
+      }));
     },
     async releaseChapter(chapter: string) {
       if (!closed) await request((id) => ({ version: 1, kind: 'release', request: id, chapter }));

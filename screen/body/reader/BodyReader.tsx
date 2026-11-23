@@ -82,6 +82,8 @@ export interface ReaderConfig extends ResolvedConfig {
   zoomStep: number;
   diagnostics?: boolean;
   renderer?: 'dom' | 'pixi';
+  maxFPS?: number;
+  tileMemoryMB?: number;
   momentum?: { enabled: boolean; speed: number };
   scrollbar: ScrollbarSettings;
   labels: Record<(typeof labelKeys)[number], string>;
@@ -188,6 +190,8 @@ export function acceptsPreparedPage(
     height = Math.max(1, Math.round((page.height * width) / page.width));
   return (
     result.id === chapter.id &&
+    (result.tiles === undefined ||
+      (result.catalogId === chapter.catalogId && result.entryId === chapter.entryId)) &&
     result.sourceRevision === chapter.sourceRevision &&
     result.pageId === page.id &&
     result.index === page.index &&
@@ -245,6 +249,8 @@ export const configKeys = [
   'labels',
   'diagnostics',
   'renderer',
+  'maxFPS',
+  'tileMemoryMB',
   'momentum',
   'scrollbar',
 ];
@@ -280,6 +286,16 @@ export function validateConfig(
     reject('diagnostics', 'boolean opt-in, default false', config.diagnostics);
   if (config.renderer !== undefined && config.renderer !== 'dom' && config.renderer !== 'pixi')
     reject('renderer', 'dom or pixi', config.renderer);
+  if (
+    config.maxFPS !== undefined &&
+    (!Number.isInteger(config.maxFPS) || !finite(config.maxFPS, 10, 240))
+  )
+    reject('maxFPS', '10–240 frame ceiling', config.maxFPS);
+  if (
+    config.tileMemoryMB !== undefined &&
+    (!Number.isInteger(config.tileMemoryMB) || !finite(config.tileMemoryMB, 16, 512))
+  )
+    reject('tileMemoryMB', '16–512 MB estimated tile surfaces', config.tileMemoryMB);
   if (
     config.momentum !== undefined &&
     (!isObject(config.momentum) ||
@@ -889,6 +905,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     page: PageMetadata,
     decodeWidth: number,
     priority: ReaderWorkPriority = 'visible',
+    requestedWarm?: { top: number; height: number },
   ): Promise<HTMLImageElement | null> => {
     const monitor = metrics.current,
       nativeStart = monitor ? performance.now() : 0;
@@ -932,7 +949,35 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     try {
       if (gpu) {
         if (!surface.current) throw new Error('GPU renderer is not mounted');
-        await surface.current.preparePage(response, priority);
+        const scale = zoomValue.current / chapter.geometry.ratio;
+        const offset =
+          chapter.pages
+            .slice(0, page.index)
+            .reduce(
+              (sum, p) =>
+                sum +
+                displayBox(p, chapter.geometry.maximumPixels, chapter.geometry.ratio).height +
+                config.pageGap,
+              0,
+            ) * zoomValue.current;
+        const warm =
+          requestedWarm ??
+          (priority !== 'background' &&
+          (priority === 'demand' || offset < (viewport.current?.clientHeight ?? 0))
+            ? {
+                top: 0,
+                height: Math.max(
+                  1,
+                  Math.min(
+                    response.height,
+                    ((viewport.current?.clientHeight ?? 1) -
+                      Math.min(offset, viewport.current?.clientHeight ?? 0)) /
+                      scale,
+                  ),
+                ),
+              }
+            : undefined);
+        await surface.current.preparePage(response, priority, warm);
       } else await image.decode();
     } catch (error) {
       image.removeAttribute('src');
@@ -1207,11 +1252,11 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       chapter.pages.filter((page) => !chapter.images.has(page.index)).map((page) => page.index),
     );
   };
-  const requiredPages = (session: ReaderSession, job: ChapterJob): number[] => {
+  const jobViewportOffset = (session: ReaderSession, job: ChapterJob): number => {
     const view = viewport.current,
       content = strip.current,
       chapter = job.chapter;
-    if (!view || !content || !chapter) return [];
+    if (!view || !content || !chapter) return 0;
     let origin = chapter.root.isConnected ? chapter.root.getBoundingClientRect().top : undefined;
     if (origin === undefined)
       for (const element of content.children) {
@@ -1229,9 +1274,16 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
             origin += (session.records.get(index)?.height ?? 0) * zoomValue.current;
         break;
       }
-    const local =
+    return (
       (view.getBoundingClientRect().top - (origin ?? content.getBoundingClientRect().bottom)) /
-      zoomValue.current;
+      zoomValue.current
+    );
+  };
+  const requiredPages = (session: ReaderSession, job: ChapterJob): number[] => {
+    const view = viewport.current,
+      chapter = job.chapter;
+    if (!view || !chapter) return [];
+    const local = jobViewportOffset(session, job);
     const first = pageAtOffset(job.offsets, Math.max(0, local));
     const last = pageAtOffset(
       job.offsets,
@@ -1262,6 +1314,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
             renderWidth: job.geometry.maximumPixels,
             maxDecodeWidth: config.maxRenderWidth,
             maxDecodedMB: config.maxDecodedMB,
+            tileCache: config.renderer !== 'dom',
           },
           priority,
         ])
@@ -1440,6 +1493,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
                 renderWidth: job.geometry.maximumPixels,
                 maxDecodeWidth: config.maxRenderWidth,
                 maxDecodedMB: config.maxDecodedMB,
+                tileCache: config.renderer !== 'dom',
               },
               job.priority,
             ]);
@@ -1498,7 +1552,21 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
           const page = chapter.pages[index];
           if (!page) throw new Error('Page metadata unavailable');
           job.operation = index;
-          const image = await prepare(chapter, page, chapter.decodeWidth, job.priority);
+          const top = Math.max(
+            0,
+            (jobViewportOffset(session, job) - (job.offsets[index] ?? 0)) * chapter.geometry.ratio,
+          );
+          const warm = needed.includes(index)
+            ? {
+                top,
+                height: Math.max(
+                  1,
+                  ((viewport.current?.clientHeight ?? 1) * chapter.geometry.ratio) /
+                    zoomValue.current,
+                ),
+              }
+            : undefined;
+          const image = await prepare(chapter, page, chapter.decodeWidth, job.priority, warm);
           if (!image || !valid()) continue;
           job.remaining.delete(index);
           if (job.mounted) {
@@ -1600,6 +1668,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         renderWidth: decodeWidth,
         maxDecodeWidth: config.maxRenderWidth,
         maxDecodedMB: config.maxDecodedMB,
+        tileCache: config.renderer !== 'dom',
         ...(source.picker ? { picker: source.picker } : {}),
       });
       if (!alive.current) {
@@ -1776,6 +1845,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
             renderWidth: geometry.maximumPixels,
             maxDecodeWidth: config.maxRenderWidth,
             maxDecodedMB: config.maxDecodedMB,
+            tileCache: config.renderer !== 'dom',
           },
           'demand',
         ]);
@@ -1804,6 +1874,15 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       )
         throw new Error('Stored chapter identity/geometry changed; reopen the archive');
       const first = Math.min(config.initialPages, staging.pages.length);
+      const existingFirst = staging.preparedPages.get(0);
+      if (config.renderer !== 'dom' && existingFirst && surface.current)
+        await surface.current.preparePage(existingFirst, 'demand', {
+          top: 0,
+          height: Math.min(
+            existingFirst.height,
+            (view.clientHeight * staging.geometry.ratio) / zoomValue.current,
+          ),
+        });
       for (let pageIndex = 0; pageIndex < first; pageIndex++) {
         if (!valid()) throw new ReaderCancelledError('Reader context changed');
         if (staging.images.has(pageIndex)) continue;
@@ -2037,6 +2116,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         gpu: config.renderer !== 'dom',
         momentum: config.momentum?.enabled !== false,
         speed: scrollSpeed.current,
+        maxFPS: config.maxFPS ?? 60,
+        tileMemoryMB: config.tileMemoryMB ?? 128,
         maxDecodedMB: config.maxDecodedMB,
         getDocumentId: () => reading.current?.sceneId ?? '',
         getPages: () =>
@@ -2052,6 +2133,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         canScroll: () =>
           alive.current && reading.current?.alive === true && !reading.current.paused,
         onMotion: () => metrics.current?.expect('momentum'),
+        onIssue: (error) => {
+          if (alive.current) setDisplay((value) => ({ ...value, error }));
+        },
         reserve: (owner, bytes, limit) => input.reserveRender([owner, bytes, limit]),
       });
       surface.current = renderer;
@@ -2065,6 +2149,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     }
   }, [
     config.renderer,
+    config.maxFPS,
+    config.tileMemoryMB,
     config.momentum?.enabled,
     config.momentum?.speed,
     config.maxDecodedMB,
