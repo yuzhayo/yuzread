@@ -10,6 +10,8 @@ export interface PixiView {
   x: number;
   y: number;
   maxY: number;
+  renderLeft: number;
+  renderWidth: number;
 }
 export interface PixiPageBox {
   key: string;
@@ -31,6 +33,7 @@ export type PixiInput =
       speed: number;
       maxFPS: number;
       tileMemoryMB: number;
+      tickWindowMs: number;
     }
   | { version: 1; kind: 'layout'; view: PixiView; pages: PixiPageBox[] }
   | { version: 1; kind: 'view'; view: PixiView }
@@ -43,7 +46,7 @@ export type PixiInput =
       warm?: { top: number; height: number };
     }
   | { version: 1; kind: 'release'; request: number; chapter: string }
-  | { version: 1; kind: 'wheel'; control: number; distance: number; maxY: number }
+  | { version: 1; kind: 'wheel'; control: number; distance: number; time: number; maxY: number }
   | { version: 1; kind: 'stop'; control: number; y: number; maxY: number }
   | { version: 1; kind: 'rebase'; control: number; delta: number; maxY: number }
   | { version: 1; kind: 'speed'; control: number; speed: number; maxY: number }
@@ -70,6 +73,8 @@ export type PixiOutput =
       y: number;
       moving: boolean;
       speed: number;
+      velocity: number;
+      gestureActive: boolean;
     }
   | {
       version: 1;
@@ -81,6 +86,10 @@ export type PixiOutput =
       residentTiles: number;
       residentBytes: number;
       blockedFrames: number;
+      skippedTiles: number;
+      skippedDecodeBytes: number;
+      skippedUploadBytes: number;
+      frame: { left: number; width: number; height: number; ratio: number };
     }
   | { version: 1; kind: 'failed'; error: string }
   | { version: 1; kind: 'tile-error'; error: string }

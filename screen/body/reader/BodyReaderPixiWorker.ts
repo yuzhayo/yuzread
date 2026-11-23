@@ -16,11 +16,13 @@ import type {
   PixiView,
 } from './BodyReaderPixiWorkerContract.js';
 import {
-  advanceMomentum,
+  advanceWheelGesture,
+  appendWheelTick,
+  createWheelGesture,
+  scaleWheelGesture,
   advanceRenderDeadline,
   tileInViewport,
-  clampMomentum,
-  momentumImpulse,
+  tileWorkNeeded,
 } from './BodyReaderPixiWorkerPolicy.ts';
 
 // CONFIG AND CONTRACT — a reader-owned worker, not DOM/Node/IPC code.
@@ -48,7 +50,10 @@ const validView = (v: unknown): v is PixiView =>
   finite(v.ratio, 0.1, 8) &&
   finite(v.x, 0) &&
   finite(v.y, 0) &&
-  finite(v.maxY, 0);
+  finite(v.maxY, 0) &&
+  finite(v.renderLeft, 0, 8192) &&
+  finite(v.renderWidth, 0.125, 8202) &&
+  v.renderLeft + v.renderWidth <= v.width + 1 / v.ratio + 0.001;
 const validBox = (v: unknown): v is PixiPageBox =>
   record(v) &&
   typeof v.key === 'string' &&
@@ -124,9 +129,11 @@ function validInput(v: unknown): v is PixiInput {
         (v.canvas === null || v.canvas instanceof OffscreenCanvas) &&
         validView(v.view) &&
         finite(v.speed, 0.1, 10) &&
-        finite(v.maxFPS, 10, 240) &&
+        (v.maxFPS === 0 || finite(v.maxFPS, 10, 240)) &&
         Number.isInteger(v.maxFPS) &&
-        finite(v.tileMemoryMB, 16, 512)
+        finite(v.tileMemoryMB, 16, 512) &&
+        finite(v.tickWindowMs, 50, 300) &&
+        Number.isInteger(v.tickWindowMs)
       );
     case 'layout':
       return (
@@ -148,7 +155,12 @@ function validInput(v: unknown): v is PixiInput {
     case 'release':
       return integer(v.request) && typeof v.chapter === 'string';
     case 'wheel':
-      return integer(v.control) && finite(v.distance, -1e6, 1e6) && finite(v.maxY, 0);
+      return (
+        integer(v.control) &&
+        finite(v.distance, -1e6, 1e6) &&
+        finite(v.time, 0, Number.MAX_SAFE_INTEGER) &&
+        finite(v.maxY, 0)
+      );
     case 'stop':
       return integer(v.control) && finite(v.y, 0) && finite(v.maxY, 0);
     case 'rebase':
@@ -235,8 +247,17 @@ let initializing: Promise<void> | null = null,
   stagingBytes = 0,
   rendererReady = false,
   paddingBytes = 0;
+let resizeTask: Promise<void> | null = null;
+const framebufferPixels = (value: PixiView) =>
+  Math.max(1, Math.round(value.renderWidth * value.ratio)) *
+  Math.max(1, Math.round(value.height * value.ratio));
+const frameMatches = (value: PixiView) =>
+  !!renderer &&
+  renderer.canvas.width === Math.max(1, Math.round(value.renderWidth * value.ratio)) &&
+  renderer.canvas.height === Math.max(1, Math.round(value.height * value.ratio)) &&
+  renderer.resolution === value.ratio;
 let visualDirty = true,
-  maxFPS = 60,
+  maxFPS = 0,
   renderDeadline = 0;
 let resourceId = 0,
   resourceChain: Promise<void> = Promise.resolve();
@@ -246,7 +267,12 @@ const baseline = () =>
   paddingBytes +
   Math.max(cacheReservation, cachedBytes + cacheStaging) +
   (renderer && view
-    ? Math.ceil(view.width * view.ratio) * Math.ceil(view.height * view.ratio) * 12 + 4 * MB
+    ? Math.max(
+        framebufferPixels(view),
+        rendererReady ? renderer.canvas.width * renderer.canvas.height : 0,
+      ) *
+        12 +
+      4 * MB
     : 0);
 function reserve(bytes: number): Promise<void> {
   const task = resourceChain.then(async () => {
@@ -327,8 +353,9 @@ function releasePages() {
 let y = 0,
   maxY = 0,
   velocity = 0,
-  target = 0,
   control = 0;
+let gesture = createWheelGesture(),
+  tickWindowMs = 150;
 let frame: number | null = null,
   lastTime: number | null = null,
   serial = 0,
@@ -339,6 +366,9 @@ let speed = 1;
 let renderOutstanding = 0;
 let blockedFrames = 0;
 let tileIssue = false;
+let skippedTiles = 0,
+  skippedDecodeBytes = 0,
+  skippedUploadBytes = 0;
 interface RenderSummary {
   revision: number;
   pages: number;
@@ -346,6 +376,10 @@ interface RenderSummary {
   residentTiles: number;
   residentBytes: number;
   blockedFrames: number;
+  skippedTiles: number;
+  skippedDecodeBytes: number;
+  skippedUploadBytes: number;
+  frame: { left: number; width: number; height: number; ratio: number };
 }
 let renderSummary: RenderSummary | null = null;
 let sentRender: RenderSummary | null = null;
@@ -358,19 +392,37 @@ function publishRender() {
     sentRender.visiblePages === renderSummary.visiblePages &&
     sentRender.residentTiles === renderSummary.residentTiles &&
     sentRender.residentBytes === renderSummary.residentBytes &&
-    sentRender.blockedFrames === renderSummary.blockedFrames
+    sentRender.blockedFrames === renderSummary.blockedFrames &&
+    sentRender.skippedTiles === renderSummary.skippedTiles
   )
     return;
   renderOutstanding = ++serial;
   sentRender = renderSummary;
   reply({ version: 1, kind: 'rendered', serial: renderOutstanding, ...renderSummary });
 }
-const moving = () => velocity !== 0 || target !== 0;
+const moving = () => gesture.velocity !== 0 || gesture.remaining !== 0;
+function clearMotion() {
+  gesture = createWheelGesture();
+  velocity = 0;
+  lastTime = null;
+}
 function publishPosition() {
   if (outstanding || !positionDirty || disposed) return;
   positionDirty = false;
   outstanding = ++serial;
-  reply({ version: 1, kind: 'position', serial: outstanding, control, y, moving: moving(), speed });
+  reply({
+    version: 1,
+    kind: 'position',
+    serial: outstanding,
+    control,
+    y,
+    moving: moving(),
+    speed,
+    velocity,
+    gestureActive:
+      gesture.lastTick !== null &&
+      performance.timeOrigin + performance.now() - gesture.lastTick <= tickWindowMs,
+  });
 }
 function schedule() {
   if (frame !== null || disposed) return;
@@ -387,11 +439,12 @@ function tick(time: number) {
   renderDeadline = clock.deadline;
   cacheUploadBytes = 0;
   if (moving()) {
-    const next = advanceMomentum(
-      velocity,
-      target,
+    const next = advanceWheelGesture(
+      gesture,
       lastTime === null ? 0 : (time - lastTime) / 1000,
+      performance.timeOrigin + performance.now(),
       speed,
+      tickWindowMs,
     );
     const desired = y + next.distance;
     let nextY = Math.max(0, Math.min(maxY, desired));
@@ -406,30 +459,24 @@ function tick(time: number) {
           page.cache?.some((tile) => tile.failed && tileVisible(page, tile, demandY ?? y)),
         )
       )
-        velocity = target = 0;
+        clearMotion();
     }
     if (nextY !== y) visualDirty = true;
     y = nextY;
     // Waiting for a tile must not consume the remaining momentum or cause a catch-up jump.
     if (!blocked) {
-      velocity = next.velocity;
-      target = next.target;
+      gesture = next.state;
+      velocity = gesture.velocity;
     }
-    if ((desired < 0 || desired > maxY) && Math.abs(y - desired) > 0.001) velocity = target = 0;
+    if ((desired < 0 || desired > maxY) && Math.abs(y - desired) > 0.001) clearMotion();
     positionDirty = true;
   }
   lastTime = moving() ? time : null;
   const work = upload;
   upload = null;
   work?.();
-  if (
-    renderer &&
-    rendererReady &&
-    view &&
-    renderer.screen.width === view.width &&
-    renderer.screen.height === view.height &&
-    renderer.resolution === view.ratio
-  ) {
+  queueResize();
+  if (renderer && rendererReady && view && frameMatches(view)) {
     let count = renderSummary?.visiblePages ?? 0;
     if (visualDirty && !missingViewport(y)) {
       count = 0;
@@ -441,7 +488,7 @@ function tick(time: number) {
             top = page.box.top - y;
           const scaleX = page.box.width / page.source.width,
             scaleY = page.box.height / page.source.height;
-          page.node.position.set(left, top);
+          page.node.position.set(left - view.renderLeft, top);
           page.node.scale.set(scaleX, scaleY);
           for (const tile of page.tiles)
             tile.sprite.visible = tileInViewport(
@@ -488,6 +535,18 @@ function tick(time: number) {
       ),
       residentBytes: cachedBytes,
       blockedFrames,
+      skippedTiles,
+      skippedDecodeBytes,
+      skippedUploadBytes,
+      frame:
+        visualDirty && renderSummary
+          ? renderSummary.frame
+          : {
+              left: view.renderLeft,
+              width: view.renderWidth,
+              height: view.height,
+              ratio: view.ratio,
+            },
     };
     publishRender();
   }
@@ -501,8 +560,7 @@ function stop(offset: number) {
   if (nextY !== y) visualDirty = true;
   y = nextY;
   demandY = null;
-  velocity = target = 0;
-  lastTime = null;
+  clearMotion();
   positionDirty = true;
   schedule();
 }
@@ -558,6 +616,15 @@ function tileVisible(page: Page, tile: CachedTile, offset: number) {
 function checkTilePage(page: Page) {
   if (disposed || pages.get(pageKey(page.source)) !== page)
     throw new SurfaceError('Tile page released', 'cancelled');
+}
+const wantedTile = (page: Page, tile: CachedTile) =>
+  tileWorkNeeded(cachePriority(page, tile), tileVisible(page, tile, y));
+function skipTile(tile: CachedTile, decodeStarted: boolean) {
+  const bytes = tile.source.encodedWidth * tile.source.encodedHeight * 4;
+  skippedTiles++;
+  if (!decodeStarted) skippedDecodeBytes += bytes;
+  skippedUploadBytes += bytes;
+  schedule();
 }
 function missingViewport(offset: number) {
   for (const page of pages.values())
@@ -675,21 +742,35 @@ async function loadCache() {
       activeTileChapter = page.chapter;
       let bitmap: ImageBitmap | null = null,
         texture: Texture | null = room.texture;
+      let decodeStarted = false;
       try {
         checkTilePage(page);
         cacheStaging = cost + source.bytes;
         await reserve(baseline() + stagingBytes);
         checkTilePage(page);
+        if (!wantedTile(page, tile)) {
+          skipTile(tile, decodeStarted);
+          continue;
+        }
         const response = await fetch(source.url, { signal: abort.signal, credentials: 'omit' });
         if (!response.ok || Number(response.headers.get('content-length')) !== source.bytes)
           throw new Error('Cached tile is unavailable');
         const blob = await response.blob();
         checkTilePage(page);
         if (blob.size !== source.bytes) throw new Error('Cached tile bytes are incomplete');
+        if (!wantedTile(page, tile)) {
+          skipTile(tile, decodeStarted);
+          continue;
+        }
+        decodeStarted = true;
         bitmap = await createImageBitmap(blob, { imageOrientation: 'none' });
         checkTilePage(page);
         if (bitmap.width !== source.encodedWidth || bitmap.height !== source.encodedHeight)
           throw new Error('Cached tile dimensions do not match');
+        if (!wantedTile(page, tile)) {
+          skipTile(tile, decodeStarted);
+          continue;
+        }
         const frame = new Rectangle(source.offsetX, source.offsetY, source.width, source.height);
         if (texture) {
           texture.frame.copyFrom(frame);
@@ -709,8 +790,10 @@ async function loadCache() {
           decoded = bitmap;
         if (!current) throw new Error('Renderer closed');
         const uploadBytes = source.encodedWidth * source.encodedHeight * 4;
+        let submitted = false;
         const submit = () => {
           checkTilePage(page);
+          if (!wantedTile(page, tile)) return;
           if (room.texture) {
             // Same dimensions preserve GPU storage; Pixi uploads the replacement with texSubImage2D.
             // The old bitmap is closed at eviction; this single slot is covered by cacheStaging.
@@ -718,6 +801,7 @@ async function loadCache() {
             created.source.update();
           } else current.texture.initSource(created.source);
           cacheUploadBytes += uploadBytes;
+          submitted = true;
         };
         if (cacheUploadBytes + uploadBytes <= CACHE_UPLOAD_LIMIT) submit();
         else
@@ -733,6 +817,10 @@ async function loadCache() {
             schedule();
           });
         checkTilePage(page);
+        if (!submitted) {
+          skipTile(tile, decodeStarted);
+          continue;
+        }
         const sprite = new Sprite({ texture });
         sprite.eventMode = 'none';
         sprite.position.set(source.left, source.top);
@@ -749,9 +837,15 @@ async function loadCache() {
         settleWarm();
         schedule();
       } catch (error) {
+        if (
+          !disposed &&
+          !wantedTile(page, tile) &&
+          !(error instanceof SurfaceError && error.code === 'cancelled')
+        ) {
+          skipTile(tile, decodeStarted);
+          continue;
+        }
         if (error instanceof SurfaceError && error.code === 'deferred') {
-          texture?.destroy(true);
-          bitmap?.close();
           for (let n = warmWaiters.length - 1; n >= 0; n--)
             if (warmWaiters[n]?.page === page) {
               warmWaiters[n]?.reject(error);
@@ -759,12 +853,12 @@ async function loadCache() {
             }
           break;
         }
-        texture?.destroy(true);
-        bitmap?.close();
         tile.failed = true;
         settleWarm();
         if (!(error instanceof SurfaceError && error.code === 'cancelled')) throw error;
       } finally {
+        texture?.destroy(true);
+        bitmap?.close();
         activeTileChapter = null;
         cacheStaging = 0;
         if (!disposed) await reserve(baseline() + stagingBytes);
@@ -1046,20 +1140,38 @@ async function resizeRenderer(next: PixiView) {
   await reserve(baseline() + stagingBytes);
   if (
     !disposed &&
-    view?.width === next.width &&
+    view?.renderWidth === next.renderWidth &&
     view.height === next.height &&
-    view.ratio === next.ratio
+    view.ratio === next.ratio &&
+    !missingViewport(y)
   ) {
-    renderer.resize(next.width, next.height, next.ratio);
+    renderer.resize(next.renderWidth, next.height, next.ratio);
     visualDirty = true;
     schedule();
   }
+}
+function queueResize() {
+  if (disposed || resizeTask || !view || !rendererReady || frameMatches(view) || missingViewport(y))
+    return;
+  resizeTask = resizeRenderer(view)
+    .catch((error) =>
+      reply({
+        version: 1,
+        kind: 'failed',
+        error: error instanceof Error ? error.message : 'GPU resize failed',
+      }),
+    )
+    .finally(() => {
+      resizeTask = null;
+      if (!disposed) schedule();
+    });
 }
 async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   view = message.view;
   speed = message.speed;
   maxFPS = message.maxFPS;
   tileLimit = message.tileMemoryMB * MB;
+  tickWindowMs = message.tickWindowMs;
   y = view.y;
   maxY = view.maxY;
   control = view.control;
@@ -1072,7 +1184,7 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   await reserve(baseline());
   await renderer.init({
     canvas: message.canvas,
-    width: view.width,
+    width: view.renderWidth,
     height: view.height,
     resolution: view.ratio,
     backgroundAlpha: 0,
@@ -1082,12 +1194,7 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   });
   if (disposed) return;
   rendererReady = true;
-  if (
-    renderer.screen.width !== view.width ||
-    renderer.screen.height !== view.height ||
-    renderer.resolution !== view.ratio
-  )
-    await resizeRenderer(view);
+  if (!frameMatches(view)) await resizeRenderer(view);
   const maximum: unknown = renderer.gl.getParameter(renderer.gl.MAX_TEXTURE_SIZE);
   if (!finite(maximum, 4, 65536)) throw new Error('GPU texture limit is invalid');
   reply({
@@ -1120,7 +1227,7 @@ async function dispose() {
       result: { ok: false, code: 'cancelled', error: 'Reader closed' },
       timing: { bitmapMs: 0, uploadMs: 0 },
     });
-  await Promise.allSettled([initializing, pumpingTask, cacheTask, resourceChain]);
+  await Promise.allSettled([initializing, pumpingTask, cacheTask, resourceChain, resizeTask]);
   for (const page of pages.values()) destroyPage(page);
   pages.clear();
   stage.destroy({ children: true });
@@ -1165,7 +1272,9 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
       view.x !== message.view.x ||
       view.width !== message.view.width ||
       view.height !== message.view.height ||
-      view.ratio !== message.view.ratio
+      view.ratio !== message.view.ratio ||
+      view.renderLeft !== message.view.renderLeft ||
+      view.renderWidth !== message.view.renderWidth
     )
       visualDirty = true;
     const changed = view?.documentId !== message.view.documentId;
@@ -1205,20 +1314,7 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
         destroyPage(page);
       }
     }
-    if (
-      renderer &&
-      rendererReady &&
-      (renderer.screen.width !== view.width ||
-        renderer.screen.height !== view.height ||
-        renderer.resolution !== view.ratio)
-    )
-      void resizeRenderer(view).catch((error) =>
-        reply({
-          version: 1,
-          kind: 'failed',
-          error: error instanceof Error ? error.message : 'GPU resize failed',
-        }),
-      );
+    queueResize();
     schedule();
     startCache();
   } else if (message.kind === 'prepare') {
@@ -1254,14 +1350,15 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
     if (message.kind === 'wheel') {
       for (const page of pages.values())
         if (page.cache) for (const tile of page.cache) tile.failed = false;
-      target = clampMomentum(target + momentumImpulse(message.distance, speed), speed);
+      gesture = appendWheelTick(gesture, message.distance, message.time, speed, tickWindowMs);
+      velocity = gesture.velocity;
       lastTime ??= performance.now();
       schedule();
     } else if (message.kind === 'speed') {
       const factor = message.speed / speed;
       speed = message.speed;
-      velocity = clampMomentum(velocity * factor, speed);
-      target = clampMomentum(target * factor, speed);
+      gesture = scaleWheelGesture(gesture, factor, speed);
+      velocity = gesture.velocity;
       positionDirty = true;
       schedule();
     } else if (message.kind === 'stop') stop(message.y);

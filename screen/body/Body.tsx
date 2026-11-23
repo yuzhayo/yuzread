@@ -19,6 +19,7 @@ import type {
   ReaderMetricEvent,
   ReaderNavigationState,
   ReaderNavigationRequest,
+  ReaderDropRequest,
 } from '../../ShellHost.js';
 import BodyReader, {
   componentId,
@@ -249,6 +250,15 @@ const createPorts = () => ({
     contract('native.reader.open.output.v4', openResult),
     { ok: false, error: 'Capability is unavailable' },
   ),
+  dropOpen: createRequest(
+    contract(
+      'native.reader.drop.input',
+      (v: unknown): v is ReaderDropRequest =>
+        Array.isArray(v) && v.length === 2 && v[0] instanceof File && options(v[1]),
+    ),
+    contract('native.reader.open.output.v4', openResult),
+    { ok: false, error: 'Dropped file opening is unavailable' },
+  ),
   chapterOpen: createRequest(
     contract(
       'native.reader.chapter.input.v2',
@@ -340,6 +350,7 @@ const children = [
     { componentId, fileName: 'reader/BodyReader.tsx', configKeys, partKeys },
     (ports: Ports) => ({
       openArchive: ports.archiveOpen.request,
+      openDroppedArchive: ports.dropOpen.request,
       openChapter: ports.chapterOpen.request,
       preparePage: ports.prepare.request,
       releaseChapter: ports.release.request,

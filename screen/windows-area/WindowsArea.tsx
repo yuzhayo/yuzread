@@ -28,6 +28,12 @@ import WindowsAreaBtnScrollSpeed, {
   partKeys as speedParts,
   validateConfig as validateSpeed,
 } from './WindowsAreaBtnScrollSpeed.tsx';
+import WindowsAreaBtnSettingScreen, {
+  componentId as settingScreenId,
+  configKeys as settingScreenKeys,
+  partKeys as settingScreenParts,
+  validateConfig as validateSettingScreen,
+} from './WindowsAreaBtnSettingScreen.tsx';
 
 // CONFIG AND CONTRACT — parent's contracts and direct child assembly, no button algorithms.
 export const areaId = 'windowsBar';
@@ -123,6 +129,17 @@ const createPorts = () => ({
 });
 type Ports = ReturnType<typeof createPorts>;
 const children = [
+  bindChild(
+    WindowsAreaBtnSettingScreen,
+    validateSettingScreen,
+    {
+      componentId: settingScreenId,
+      fileName: 'WindowsAreaBtnSettingScreen.tsx',
+      configKeys: settingScreenKeys,
+      partKeys: settingScreenParts,
+    },
+    (_ports: Ports, report) => ({ report }),
+  ),
   bindChild(
     WindowsAreaBtnScrollSpeed,
     validateSpeed,

@@ -41,6 +41,7 @@ const channels = [
   'shell:diagnostics',
   'shell:startup-error',
   'reader:open',
+  'reader:open-file',
   'reader:chapter',
   'reader:prepare',
   'reader:release',
@@ -117,6 +118,10 @@ else {
         }),
         'shell:window-action': (operation: unknown) => native.activate(operation),
         'reader:open': (options: unknown) => archive.open(options),
+        'reader:open-file': (filePath: unknown, options: unknown) =>
+          typeof filePath === 'string'
+            ? archive.open(options, filePath)
+            : { ok: false, error: 'Invalid dropped CBZ path' },
         'reader:chapter': (
           catalogId: unknown,
           entryId: unknown,

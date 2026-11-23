@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -19,6 +19,11 @@ const archiveIndex = process.argv.indexOf('--archive');
 const archive = archiveIndex >= 0 ? path.resolve(process.argv[archiveIndex + 1]) : null;
 const warmReplay = process.argv.includes('--warm-replay');
 const verifyReuse = process.argv.includes('--verify-reuse');
+const screenConfig = JSON.parse(await readFile(path.join(root, 'screen', 'config.json'), 'utf8'));
+const ceiling =
+  screenConfig.areas
+    .find((area) => area.id === 'body')
+    .children.find((child) => child.id === 'reader').maxFPS ?? 0;
 const evidence = path.join(root, '.runtime', `reader-resource-${label}-${Date.now()}`);
 await mkdir(evidence, { recursive: true });
 if (archive) assert.ok((await stat(archive)).isFile(), 'the caller-selected archive must exist');
@@ -110,6 +115,7 @@ try {
       subUploads: 0,
       uploadedBytes: 0,
       uploadCpuMs: 0,
+      clearedPixels: 0,
     };
     for (const name of ['createTexture', 'deleteTexture', 'texImage2D', 'texSubImage2D']) {
       const original = WebGL2RenderingContext.prototype[name];
@@ -149,6 +155,7 @@ try {
     WebGL2RenderingContext.prototype.clear = function (...args) {
       const c = globalThis.resourceCounters;
       c.clears++;
+      c.clearedPixels += this.drawingBufferWidth * this.drawingBufferHeight;
       c.drawTimes.push(performance.now());
       if (c.slot !== null && c.slot !== c.lastSlot) {
         c.renderSlots++;
@@ -171,13 +178,16 @@ try {
   const beforeMemory = await snapshot();
   const gpuPids = beforeMemory.filter((p) => p.type === 'GPU').map((p) => p.pid);
   assert.ok(gpuPids.length);
-  await page.locator('[data-reader-pixi]').screenshot({ path: path.join(evidence, 'before.png') });
+  await page
+    .locator('[data-reader-viewport]')
+    .screenshot({ path: path.join(evidence, 'before.png') });
   const resetCounters = () =>
     worker.evaluate(() => {
       const c = globalThis.resourceCounters;
       c.draws = c.indices = c.clears = c.renderSlots = 0;
       c.lastSlot = -1;
       c.drawTimes = [];
+      c.clearedPixels = 0;
       c.textureCreates =
         c.textureDeletes =
         c.allocationUploads =
@@ -228,6 +238,15 @@ try {
     blockedFrames: Number(
       document.querySelector('[data-reader-pixi]').dataset.pixiBlockedFrames ?? 0,
     ),
+    skippedTiles: Number(
+      document.querySelector('[data-reader-pixi]').dataset.pixiSkippedTiles ?? 0,
+    ),
+    skippedDecodeBytes: Number(
+      document.querySelector('[data-reader-pixi]').dataset.pixiSkippedDecodeBytes ?? 0,
+    ),
+    skippedUploadBytes: Number(
+      document.querySelector('[data-reader-pixi]').dataset.pixiSkippedUploadBytes ?? 0,
+    ),
   }));
   const settled = await page
     .waitForFunction(
@@ -248,7 +267,8 @@ try {
       render.subUploads >= 10,
       'pool-pressure replacements must reuse GPU storage, not allocate every tile again',
     );
-  assert.ok(drawHz <= 61, 'drawing must obey the 60-update ceiling');
+  if (ceiling > 0)
+    assert.ok(drawHz <= ceiling + 1, 'drawing must obey the configured update ceiling');
   assert.ok(
     tiles.residentTiles > 0 && tiles.residentBytes > 0 && tiles.residentBytes <= 128 * 1048576,
     'this fixture must fit the bounded tile pool',
@@ -335,6 +355,17 @@ try {
     clearCalls: render.clears,
     drawFrames: render.renderSlots,
     drawHz: (render.renderSlots * 1000) / duration,
+    clearedPixelsPerSecond: (render.clearedPixels * 1000) / duration,
+    canvas: await page.evaluate(() => {
+      const c = document.querySelector('[data-reader-pixi]'),
+        v = document.querySelector('[data-reader-viewport]');
+      return {
+        width: c.width,
+        height: c.height,
+        viewportWidth: v.clientWidth,
+        viewportHeight: v.clientHeight,
+      };
+    }),
     gpuBusiestEngineAverage: perSample.reduce((a, b) => a + b, 0) / perSample.length,
     gpuBusiestEnginePeak: Math.max(...perSample),
     gpuSamples: gpu,
@@ -351,6 +382,7 @@ try {
     idleDraws: idleAfter - idleBefore,
     scrollTop: top,
     coverage: {
+      frameCeiling: ceiling === 0 ? 'disabled' : ceiling,
       archive: archive ? path.basename(archive) : 'generated long-page fixture',
       display: '165 Hz system, forced DPR 1',
       window: '1320x1320',
@@ -404,7 +436,7 @@ try {
         await page.locator('[data-reader-pixi]').getAttribute('data-pixi-blocked-frames'),
       ),
     };
-    assert.ok(result.warmReplay.drawHz <= 61);
+    if (ceiling > 0) assert.ok(result.warmReplay.drawHz <= ceiling + 1);
   }
   if (verifyReuse) {
     const revision = await page.locator('[data-reader-pixi]').getAttribute('data-pixi-revision');
@@ -424,7 +456,7 @@ try {
         { timeout: 5000 },
       );
     const bitmap = await page
-      .locator('[data-reader-pixi]')
+      .locator('[data-reader-viewport]')
       .screenshot({ path: path.join(evidence, 'reused-first-page.png') });
     // Exclude UI overlays, but cross both the 1024-pixel horizontal and vertical seams.
     const crop = { left: 40, top: 90, width: 1240, height: 1120 };
@@ -447,6 +479,8 @@ try {
         label,
         evidence,
         drawHz: result.drawHz,
+        clearedPixelsPerSecond: result.clearedPixelsPerSecond,
+        canvas: result.canvas,
         uploads: result.uploads,
         submittedIndices: result.submittedIndices,
         gpuAverage: result.gpuBusiestEngineAverage,

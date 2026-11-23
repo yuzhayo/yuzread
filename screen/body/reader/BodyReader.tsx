@@ -22,6 +22,7 @@ import type {
   ReaderPickerSettings,
   ReaderNavigationRequest,
   ReaderNavigationState,
+  ReaderDropRequest,
 } from '../../../ShellHost.js';
 import type { ConfigReport, ChildProps } from '@logic/AreaDiscovery.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
@@ -41,6 +42,7 @@ export type ScreenOpenResult =
 export type ReaderOpenIntent = ActionSource & { picker?: ReaderPickerSettings };
 export interface BodyReaderInput {
   openArchive(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
+  openDroppedArchive(request: ReaderDropRequest): Promise<ReaderOpenResult>;
   openChapter(request: ReaderChapterRequest): Promise<ReaderChapterResult>;
   preparePage(request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;
   releaseChapter(id: string): Promise<Result>;
@@ -84,7 +86,7 @@ export interface ReaderConfig extends ResolvedConfig {
   renderer?: 'dom' | 'pixi';
   maxFPS?: number;
   tileMemoryMB?: number;
-  momentum?: { enabled: boolean; speed: number };
+  momentum?: { enabled: boolean; speed: number; tickWindowMs?: number };
   scrollbar: ScrollbarSettings;
   labels: Record<(typeof labelKeys)[number], string>;
   parts: Record<(typeof partKeys)[number], ResolvedPart>;
@@ -288,9 +290,9 @@ export function validateConfig(
     reject('renderer', 'dom or pixi', config.renderer);
   if (
     config.maxFPS !== undefined &&
-    (!Number.isInteger(config.maxFPS) || !finite(config.maxFPS, 10, 240))
+    (!Number.isInteger(config.maxFPS) || (config.maxFPS !== 0 && !finite(config.maxFPS, 10, 240)))
   )
-    reject('maxFPS', '10–240 frame ceiling', config.maxFPS);
+    reject('maxFPS', '0 (uncapped) or 10–240 frame ceiling', config.maxFPS);
   if (
     config.tileMemoryMB !== undefined &&
     (!Number.isInteger(config.tileMemoryMB) || !finite(config.tileMemoryMB, 16, 512))
@@ -301,9 +303,18 @@ export function validateConfig(
     (!isObject(config.momentum) ||
       typeof config.momentum.enabled !== 'boolean' ||
       !finite(config.momentum.speed, 0.1, 10) ||
-      Object.keys(config.momentum).some((key) => !['enabled', 'speed'].includes(key)))
+      (config.momentum.tickWindowMs !== undefined &&
+        (!Number.isInteger(config.momentum.tickWindowMs) ||
+          !finite(config.momentum.tickWindowMs, 50, 300))) ||
+      Object.keys(config.momentum).some(
+        (key) => !['enabled', 'speed', 'tickWindowMs'].includes(key),
+      ))
   )
-    reject('momentum', 'enabled boolean and speed 0.1–10', config.momentum);
+    reject(
+      'momentum',
+      'enabled boolean, speed 0.1–10, optional tickWindowMs 50–300',
+      config.momentum,
+    );
   if (
     !isNamedRecord(
       config.labels,
@@ -846,12 +857,19 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   const host = useMemo(
     () => ({
       open: input.openArchive,
+      drop: input.openDroppedArchive,
       chapter: input.openChapter,
       prepare: (id: string, index: number, decodeWidth: number, priority: ReaderWorkPriority) =>
         input.preparePage([id, index, decodeWidth, priority]),
       release: input.releaseChapter,
     }),
-    [input.openArchive, input.openChapter, input.preparePage, input.releaseChapter],
+    [
+      input.openArchive,
+      input.openDroppedArchive,
+      input.openChapter,
+      input.preparePage,
+      input.releaseChapter,
+    ],
   );
   const syncNavigation = () => {
     const session = reading.current;
@@ -1638,7 +1656,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     const available = viewport.current.clientWidth - config.pageInset;
     return Math.max(1, Math.floor(available * ratio));
   };
-  const openChapter = async (source: ReaderOpenIntent): Promise<ScreenOpenResult> => {
+  const openChapter = async (
+    source: ReaderOpenIntent,
+    droppedFile?: File,
+  ): Promise<ScreenOpenResult> => {
     if (opening.current || navigating.current)
       return { ok: false, error: 'Another reader navigation is active' };
     opening.current = true;
@@ -1664,13 +1685,16 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       const ratio = Math.max(0.1, window.devicePixelRatio || 1);
       const decodeWidth = Math.min(config.maxRenderWidth, maximumPixels(ratio));
       const geometry = { ratio, maximumPixels: decodeWidth };
-      const response = await host.open({
+      const options: ReaderOpenOptions = {
         renderWidth: decodeWidth,
         maxDecodeWidth: config.maxRenderWidth,
         maxDecodedMB: config.maxDecodedMB,
         tileCache: config.renderer !== 'dom',
         ...(source.picker ? { picker: source.picker } : {}),
-      });
+      };
+      const response = droppedFile
+        ? await host.drop([droppedFile, options])
+        : await host.open(options);
       if (!alive.current) {
         if (response.ok && 'chapter' in response)
           void host.release(response.catalog.id).catch(() => {});
@@ -2100,6 +2124,45 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
 
   // LOGIC — the reader owns the open capability; the Windows area only requests it.
   useEffect(() => {
+    const view = viewport.current;
+    if (!view) return undefined;
+    const over = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes('Files')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = opening.current || navigating.current ? 'none' : 'copy';
+    };
+    const drop = (event: DragEvent) => {
+      if (!event.dataTransfer?.types.includes('Files')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const files = Array.from(event.dataTransfer.files);
+      const file = files[0];
+      if (files.length !== 1 || !file || !/\.cbz$/i.test(file.name)) {
+        setDisplay((value) => ({ ...value, error: 'Drop one CBZ file at a time' }));
+        return;
+      }
+      if (opening.current || navigating.current) return;
+      void openChapter(
+        {
+          componentId,
+          instanceId: config.id,
+          filePath: config.filePath,
+          configPath: config.configPath,
+        },
+        file,
+      );
+    };
+    view.addEventListener('dragenter', over);
+    view.addEventListener('dragover', over);
+    view.addEventListener('drop', drop);
+    return () => {
+      view.removeEventListener('dragenter', over);
+      view.removeEventListener('dragover', over);
+      view.removeEventListener('drop', drop);
+    };
+  }, [input.openDroppedArchive]);
+  useEffect(() => {
     return input.registerOpenRequest((source) => openChapter(source));
   }, [input.registerOpenRequest]);
   useEffect(() => {
@@ -2116,8 +2179,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         gpu: config.renderer !== 'dom',
         momentum: config.momentum?.enabled !== false,
         speed: scrollSpeed.current,
-        maxFPS: config.maxFPS ?? 60,
+        maxFPS: config.maxFPS ?? 0,
         tileMemoryMB: config.tileMemoryMB ?? 128,
+        tickWindowMs: config.momentum?.tickWindowMs ?? 150,
         maxDecodedMB: config.maxDecodedMB,
         getDocumentId: () => reading.current?.sceneId ?? '',
         getPages: () =>
@@ -2153,6 +2217,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     config.tileMemoryMB,
     config.momentum?.enabled,
     config.momentum?.speed,
+    config.momentum?.tickWindowMs,
     config.maxDecodedMB,
     input.reserveRender,
   ]);

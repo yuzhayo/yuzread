@@ -24,6 +24,7 @@ import type {
   ReaderBudget,
   ReaderWorkPriority,
   ReaderMetricEvent,
+  ReaderDropRequest,
 } from '../ShellHost.js';
 import './styles.css';
 
@@ -224,6 +225,15 @@ async function start() {
       contract('native.reader.open.output.v4', openResult),
       { ok: false, error: 'Capability is unavailable' },
     ),
+    dropOpen: createRequest(
+      contract(
+        'native.reader.drop.input',
+        (v: unknown): v is ReaderDropRequest =>
+          Array.isArray(v) && v.length === 2 && v[0] instanceof File && options(v[1]),
+      ),
+      contract('native.reader.open.output.v4', openResult),
+      { ok: false, error: 'Dropped file opening is unavailable' },
+    ),
     chapterOpen: createRequest(
       contract(
         'native.reader.chapter.input.v2',
@@ -335,6 +345,7 @@ async function start() {
       return response;
     }),
     ports.archiveOpen.register(host.reader.open),
+    ports.dropOpen.register(([file, options]) => host.reader.drop(file, options)),
     ports.chapterOpen.register(([catalogId, entryId, options, priority]) =>
       host.reader.chapter(catalogId, entryId, options, priority),
     ),

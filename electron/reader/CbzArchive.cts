@@ -1727,9 +1727,19 @@ export function createCbzReader(
     return task;
   };
   return {
-    async open(options: unknown): Promise<ReaderOpenResult> {
+    async open(options: unknown, droppedPath?: unknown): Promise<ReaderOpenResult> {
       if (disposed || choosing) return { ok: false, error: 'Another Open operation is active' };
       if (!openOptions(options)) return { ok: false, error: 'Invalid reader preparation settings' };
+      if (
+        droppedPath !== undefined &&
+        (typeof droppedPath !== 'string' ||
+          !droppedPath ||
+          droppedPath.length > 4096 ||
+          droppedPath.includes('\0') ||
+          !path.isAbsolute(droppedPath) ||
+          path.extname(droppedPath).toLowerCase() !== '.cbz')
+      )
+        return { ok: false, error: 'Invalid dropped CBZ path' };
       environment();
       choosing = true;
       // The picker pauses the old reading context. Preserve accepted surfaces and
@@ -1738,15 +1748,20 @@ export function createCbzReader(
       for (const key of sessions.keys()) scheduler.cancel(key);
       let authorized: ArchiveCatalog | undefined;
       try {
-        const defaultPath = await loadFolder(options.picker);
-        const selection = await dialog.showOpenDialog(window, {
-          title: 'Open CBZ',
-          properties: ['openFile'],
-          filters: [{ name: 'Comic book archive', extensions: ['cbz'] }],
-          ...(defaultPath ? { defaultPath } : {}),
-        });
-        const selected = selection.filePaths[0];
-        if (selection.canceled || !selected) return { ok: true, canceled: true };
+        let selected: string;
+        if (typeof droppedPath === 'string') selected = droppedPath;
+        else {
+          const defaultPath = await loadFolder(options.picker);
+          const selection = await dialog.showOpenDialog(window, {
+            title: 'Open CBZ',
+            properties: ['openFile'],
+            filters: [{ name: 'Comic book archive', extensions: ['cbz'] }],
+            ...(defaultPath ? { defaultPath } : {}),
+          });
+          const chosen = selection.filePaths[0];
+          if (selection.canceled || !chosen) return { ok: true, canceled: true };
+          selected = chosen;
+        }
         if (disposed || window.isDestroyed()) throw new Error('Reader closed');
         // Picker settings never become archive/worker/catalog settings.
         const preparation: ReaderOpenOptions = {

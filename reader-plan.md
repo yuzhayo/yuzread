@@ -1,6 +1,6 @@
 # Yuzread — Pixi GPU reader migration
 
-Status: **60-update ceiling and bounded disk-tile residency implemented; functional checks pass, overall resource/presentation acceptance PARTIAL.**
+Status: **Ceiling disabled for operator feel comparison; bounded tile/raster optimizations retained. Functional checks pass; feel/presentation acceptance pending.**
 
 The operator requested this plan on 2026-11-22, then approved implementation without
 overtesting/overengineering and explicitly rejected limiting scroll testing to one
@@ -16,8 +16,10 @@ architecture or TypeScript migration.
 Move page drawing and smooth scrolling to **PixiJS in a dedicated rendering
 worker**, using OffscreenCanvas and GPU-backed WebGL/WebGPU rendering. Target
 consistently paced **60-class scrolling with a 60-update ceiling**, including preparation of
-the next chapter. The operator's 2026-11-23 resource decision supersedes the former
-uncapped/high-refresh target. Validate this on the
+the next chapter was the earlier resource target. The operator has now requested
+**ceiling disabled** to compare reported micro-breaks with Citadel. Current maxFPS=0
+uses refresh/VSync-paced worker callbacks without deadline gating; the other
+resource optimizations remain. Validate feel on the
 operator's actual PC; a ticker setting or callback counter is not the acceptance
 proof. Idle content does not need continuous redraws.
 
@@ -32,8 +34,84 @@ geometry/visibility/scrolling code that cannot remain unchanged.
 
 ## Current delivered slice — 2026-11-23
 
+### Drag-drop CBZ — implemented, opener/release remain separate
+
+The reader viewport accepts one disk-backed CBZ file per drop, including uppercase
+extensions. Files dragenter/dragover/drop prevent default navigation; other drag
+types are ignored. Invalid/multiple files report through the existing status overlay
+without replacing current content. Busy Open/navigation does not start another load.
+
+BodyReader uses the same openChapter staging/geometry/preparation/commit/retirement
+path for Load and drop. Body/Screen forward the narrow dropOpen File+options request.
+Only preload uses webUtils.getPathForFile; fabricated/non-disk File objects are
+rejected, no arbitrary path resolver is exposed to UI. Trusted native reader:open-file
+validates path/options, skips only the picker, then reuses CbzArchive.open authorization,
+frozen natural-order catalog, decode/cache and folder memory. No second loader/window.
+
+check:code (23 type/22 boundary fixtures), both builds and the focused schema check
+passed. `.runtime/reader-drop-1795451850343/result.json` passed real disk-backed
+drag/drop, no picker/navigation, displayed page colors, invalid/multiple/corrupt
+survival, fabricated File rejection, same-folder next and replacement retaining
+zoom/speed/one GPU canvas. Existing Load/Pixi regression passed at
+`.runtime/reader-pixi-1795451928649/result.json`. No Setting Screen/full-suite tests.
+Windows association, OS launch arguments, versioning and release scripts were not
+implemented in this slice. No commit/push.
+
+### Tasklist — connected mouse-wheel gesture
+
+- [x] Add pure gesture state: immediate first-tick response, same-direction joining
+  within a default 150 ms window, smooth target-rate changes and bounded distance credit.
+- [x] Integrate timestamped coarse-wheel input in the existing bridge/worker; retain
+  velocity between joined ticks instead of adding a new sharp impulse each tick.
+- [x] Preserve quiet-input coast, responsive reversal, 1×–10× scaling, boundary/stop/
+  zoom/picker/blur cleanup, tile-wait protection and the separate precision-input path.
+- [x] Run focused waveform/travel/interruption checks, check:code, screen build and
+  the existing Pixi/speed interaction checks only; no full suite or new proof app.
+- [x] Record actual results and relaunch Yuzread uncapped for operator feel comparison.
+- [ ] Operator confirms the joined-tick feel on their own mouse/book; tune the window
+  only from that feedback, not by claiming the waveform check proves every hitch gone.
+
+Owners remain BodyReaderPixiWorkerPolicy.ts (pure motion), BodyReaderPixiWorker.ts
+(gesture lifetime/camera), BodyReaderPixi.ts (normalized input/timestamp) and reader
+JSON (optional tickWindowMs). No UI or native decoder change. First input must not
+wait 150 ms. Distance credit preserves the existing 1.5 gain and limits runaway
+coasting; mouse grouping must not add a second touchpad inertia tail.
+
+Delivered logic: coarse wheel events carry their event timestamp translated through
+performance.timeOrigin. The worker joins same-direction events within 150 ms, estimates
+the incoming rate and blends velocity over 40 ms (20 ms while braking/reversing).
+Quiet input uses the existing 250-ms friction scale. Bounded signed distance credit
+keeps the 1.5 gain/about 180 pixels per ordinary 120-unit notch without indefinite
+run-on; reversal discards old-direction credit, not the current position/velocity.
+Speed changes rescale velocity/rate/credit together. Stop/reset/blur clear the whole
+gesture. No timer delays first input and no sensor/animation loop runs when idle.
+
+Reader JSON momentum.tickWindowMs defaults to 150 (optional, validated 50–300 ms);
+maxFPS remains 0. The worker commits movement credit only after tile readiness, so
+waiting for missing visible pixels does not spend distance or create a catch-up jump.
+The existing small-delta precision/reduced-motion/keyboard paths remain separate.
+
+Seven focused math/config/interruption checks, check:code and screen build passed.
+Twenty 100-ms-spaced 120-unit ticks at 60/120/165-Hz schedules retained about
+3,599 pixels travel, with <0.1 px cross-schedule difference. Velocity ripple after
+settling fell from the old reference's 24.8–26.9% to 2.49–2.82%; isolated travel stayed
+about 179 px. These are motion-waveform results, not presented-FPS certification.
+The live worker/input check measured 3.35% ripple, mean 1,750 px/sec and 3,599 px
+travel; it also passed precision-input no-tail and immediate 1×–10× speed changes.
+Evidence: `.runtime/scroll-speed-1795424156769/result.json` and
+`.runtime/reader-pixi-1795424201391/result.json` (all-page pixels, stale
+response protection, momentum/chapter handoff, zoom/reset, resize/right-edge and cleanup).
+No new proof project, full suite, dependency/native change or commit/push. Operator
+feel comparison is still pending; this does not certify every reported micro-break.
+
 ### Resource optimization — approved two passes
 
+- [x] Latest operator request: disable the 60-update ceiling (`maxFPS: 0`); retain
+  positive-cap support, momentum, resource optimizations and idle stopping.
+- [ ] Operator comparison of micro-breaks versus Citadel with the ceiling disabled.
+  Static/build checks, three focused pacing/momentum tests and Pixi interaction
+  smoke passed: `.runtime/reader-pixi-1795420618547/result.json`. This tests removal
+  and behavior, not the operator's reported micro-breaks or presented FPS.
 - [x] Pass 1: 60-update deadline, per-tile culling, unchanged-frame skipping and
   bounded position publication. Idle redraws remain zero.
 - [x] Pass 2: single-level lossless 1024-pixel PNG tiles, one-pixel sampling borders,
@@ -54,9 +132,73 @@ geometry/visibility/scrolling code that cannot remain unchanged.
   lossless seam/cache checks, Pixi smoke and chapter navigation checks passed.
 - [x] Real-CBZ cold/warm comparison and exact-size GPU slot reuse under pool
   pressure, retaining pixel quality, bounded residency and 10× reversal.
+- [x] Stop obsolete tile decode/upload work and crop empty canvas margins without
+  changing the logical viewport, chapter geometry, zoom, speed or tile pool.
 - [ ] Resolve/accept the GPU upload tradeoff on the operator's real book; do not
   declare all four resource goals reduced. Actual presented-frame pacing remains
   unmeasured. No full suite or prolonged benchmark is authorized by this plan.
+
+### Actual-work reduction — 2026-11-23
+
+BodyReaderPixi.ts caches the widest known strip's horizontal extent on layout
+changes, including history spacers. The worker still receives the full logical
+viewport/page boxes, but its raster covers only the intersecting column plus one
+physical sampling pixel per edge. Narrow windows/large zoom use the full available
+viewport. No per-page-width resize during vertical movement and no per-scroll page
+rectangle scan were added. Pixel-grid crop bounds and integer CSS layout dimensions
+with a compositor transform preserve fractional DPI positioning.
+
+Rendered feedback carries the frame span. The bridge applies only a frame matching
+its latest desired span; resize is serialized and waits for required current pixels
+instead of clearing a readable framebuffer while tiles are missing. Disposal waits
+for pending resize work. The same native admission ledger reserves the larger old/
+desired framebuffer estimate during transition; no budget/dependency/native change.
+
+BodyReaderPixiWorker rechecks tile demand after reservation, after fetching and before
+bitmap decode, after decode and at the upload callback. Currently visible tiles and
+initial/navigation warm pins remain protected. Obsolete work is skipped quietly,
+not marked as source failure or allowed to consume momentum. Temporary bitmap/
+transferred-texture cleanup is centralized in finally. Bounded rendered feedback
+includes skipped tile/decode/upload byte estimates; these are not CPU-time samples.
+
+Short 1× real-book comparison, same Episode 1/window/DPR/input as before:
+
+| Measurement | Before | After |
+| --- | ---: | ---: |
+| Logical viewport | 1320×1320 | 1320×1320 |
+| Canvas pixels | 1320×1320 | 802×1320 |
+| Cleared pixel area/sec | 104.81 million | 63.62 million |
+| Worker updates/sec, not presented FPS | 60.15 | 60.10 |
+| App GPU busiest-engine average | 6.48% | 5.06% |
+| Dedicated GPU memory average, MB | 101.46 | 87.16 |
+| Renderer working set, MB | 234.30 | 231.43 |
+| Tile-blocked updates / idle redraws | 0 / 0 | 0 / 0 |
+
+Pixel-area work fell about 39%. The returned viewport region compared byte-identical
+before/after. GPU/VRAM reductions are observations from this short book-specific
+sample, not universal savings: baseline graphics clocks varied 270–345 MHz, while
+the after sample stayed at 270 MHz (memory 7000 MHz/P0 in both). Total CPU savings
+are not certified. Normal input can have zero stale skips; a controlled held future
+tile followed by reversal confirmed zero bitmap-decode calls and unchanged returned
+pixels at both 100% and 125% DPI.
+
+Fresh check:code, screen build and ten focused math/contract checks passed. Pixi
+smoke covered initial/all-page pixels, stale-response cancellation, 100%/125% DPI,
+coast/zoom/reset, narrow resize/horizontal right-edge pixels, chapter handoff/backward
+reload and cleanup. Navigation popup/jumps also passed. Initial 125% runs exposed
+the old QA assumption that outer window size equals content size; the resize check
+now uses setContentSize with one-pixel rounding tolerance. One earlier three-second
+coast wait timed out; subsequent complete runs passed, so presented-frame/timing
+certification is still not claimed.
+
+Evidence: `.runtime/reader-resource-work-before-1795417617440/result.json`,
+`.runtime/reader-resource-work-after-1795417969632/result.json`,
+`.runtime/reader-resource-work-fast-1795418927900/result.json` (10× reversal, reuse,
+failure/retry, unchanged pixels, zero blocked/idle draws),
+`.runtime/reader-pixi-1795419615962/result.json`,
+`.runtime/reader-pixi-1795419639112/result.json` (125%) and
+`.runtime/chapter-navigation-1795418668696/result.json`. No full suite, new proof
+application, global GPU setting, library scan or commit/push.
 
 ### GPU upload follow-up — 2026-11-23
 
@@ -473,7 +615,7 @@ chapters are never evicted from delayed UI information. No React per-frame loop.
   roughly 16.7-ms frame budget and documented refresh/clock tolerance
   (59.94-Hz displays are 60-class). Report rolling rates, p50/p95/p99/max intervals,
   missed frames and >25/>50-ms hitches; an average FPS alone cannot pass pacing.
-- Verify the requested 60-update ceiling on a higher-Hz monitor. Report achieved rate;
+- Verify removal of the 60-update ceiling on a higher-Hz monitor. Report achieved rate;
   monitor Hz or ticker FPS is not a substitute. Keep controlled injected stalls
   separate from normal-workload measurements.
 - Run only affected behavior checks plus npm run check:code and build. Adapt affected

@@ -6,6 +6,7 @@ import MaximizeIcon from '@mui/icons-material/CropSquare';
 import RestoreIcon from '@mui/icons-material/FilterNone';
 import CloseIcon from '@mui/icons-material/Close';
 import SpeedIcon from '@mui/icons-material/Speed';
+import SettingsIcon from '@mui/icons-material/SettingsOutlined';
 import PreviousIcon from '@mui/icons-material/ChevronLeft';
 import NextIcon from '@mui/icons-material/ChevronRight';
 import ChapterListIcon from '@mui/icons-material/FormatListBulleted';
@@ -21,6 +22,7 @@ const icons = {
   folderOpen: FolderOpenIcon,
   hourglass: HourglassTopIcon,
   speed: SpeedIcon,
+  settings: SettingsIcon,
   previous: PreviousIcon,
   next: NextIcon,
   chapters: ChapterListIcon,

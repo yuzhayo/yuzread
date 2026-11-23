@@ -16,6 +16,7 @@ screen/
 │
 ├── windows-area/
 │   ├── WindowsArea.tsx                Parent: child layout and forwarding
+│   ├── WindowsAreaBtnSettingScreen.tsx Own far-left gear and persistent settings popup
 │   ├── WindowsAreaBtnLoad.tsx         Own Load logic, validation and UI behavior
 │   ├── WindowsAreaBtnScrollSpeed.tsx  Own draggable speed panel and live controls
 │   ├── WindowsAreaBtnClose.tsx        Own Close logic, validation and UI behavior
@@ -133,6 +134,14 @@ folder takes priority. `rememberFolder: false` disables remembering. Invalid/mis
 folders fall back to the remembered folder or Electron's default. Cancel changes
 nothing. The small native preference file is `%APPDATA%\Yuzread\load-folder.json`.
 
+### Drag-drop CBZ
+
+Drop **one CBZ file** from Explorer into the reader to load it directly, without a
+picker. It uses the same loading/cache/geometry path and same-folder continuation
+as Load. A valid replacement preserves zoom and scroll speed; invalid, multiple
+or corrupt drops leave the readable book intact and show the existing status.
+Windows default-file-opener registration is not installed by this feature.
+
 ### Window and pages
 
 The window starts as the largest centered square inside the usable monitor area,
@@ -142,11 +151,26 @@ monitor, not full-width maximize. The native book/Y icon and app identity remain
 The body fills the window. Hover the transparent top strip to reveal:
 
 ```text
-[ empty draggable area ][ Scroll speed ][ Open CBZ ][ Default 1:1 ][ Close ]
+[ Setting Screen ][ empty draggable area ][ Scroll speed ][ Open CBZ ][ Default 1:1 ][ Close ]
 ```
 
 Title/minimize stay hidden; Open/default/Close retain x=85%, 89.75%, 94.5%. Leaving
 the strip hides its children without shifting the reader. Alt+F4 closes the app.
+
+### Setting Screen
+
+The far-left gear opens a draggable, modeless **Setting Screen** with a blank header,
+right-side X and section cards. Each card has a label with a collapse chevron and a
+body; collapsed cards stay mounted so their content keeps its state. The body will be
+defined later.
+Leaving the top hover strip, clicking outside or pressing Escape does not close it.
+X hides the screen without unmounting its header/body; reopening keeps the dragged
+position and future body state for this app session. No state is stored across
+restarts and no second native window is created.
+
+The settingScreen child in `screen/config.json` owns placement, popup size, header
+order, labels and visuals. `windows-area/WindowsAreaBtnSettingScreen.tsx` owns its
+open/close, focus and drag lifecycle. Reader geometry and existing controls remain.
 
 ### Bottom chapter navigation
 
@@ -241,17 +265,21 @@ loaded page**, not a first-page preview. The current reader configuration is:
 
 ```json
 "renderer": "pixi",
-"momentum": { "enabled": true, "speed": 1 },
-"maxFPS": 60,
+"momentum": { "enabled": true, "speed": 1, "tickWindowMs": 150 },
+"maxFPS": 0,
 "tileMemoryMB": 128
 ```
 
-Normal wheel ticks ramp into motion, coast and settle. Ctrl+wheel/Ctrl+0 keep their
+Normal wheel ticks start immediately; same-direction ticks within 150 ms join one
+continuous gesture with a smoothed target rate instead of a new impulse per notch.
+Quiet input coasts/stops; opposing input brakes and reverses. Optional tickWindowMs
+accepts 50–300 ms. The gain and live 1×–10× controls remain. Ctrl+wheel/Ctrl+0 keep their
 zoom behavior and interrupt old momentum. Keyboard/scrollbar positioning, blur,
 hidden state, picker and close also stop it. Fine pixel input is left native using
 a small-delta heuristic to avoid adding a second device-inertia tail; it is not a
-guaranteed mouse/touchpad classifier. Drawing/position updates are capped at 60 per
-second; unchanged content is not redrawn and no idle animation loop runs.
+guaranteed mouse/touchpad classifier. `maxFPS: 0` disables the application ceiling;
+drawing follows available browser/display refresh slots. Positive values 10–240
+can restore a cap. Unchanged content is not redrawn and no idle animation loop runs.
 
 Lossless 1024-pixel tiles with sampling borders stay on disk. Only a bounded working
 set of visible/nearby/recent tiles becomes worker bitmaps/textures; DOM elements reserve geometry
@@ -276,6 +304,13 @@ A short real-CBZ 10× reversal reduced new texture allocations **121 → 21** (a
 83%), with unchanged returned page pixels and no tile-blocked updates. The 60 cap
 and 128 MiB pool stay unchanged. GPU percentage/CPU-time savings are not certified:
 device clock/activity varied. Results and scope are in `reader-plan.md`.
+
+The canvas now excludes empty horizontal margins while the reader viewport remains
+full size. Obsolete tile work is rechecked before decode/upload, with visible/warm
+tiles protected. A short same-book check reduced cleared canvas area about **39%**
+with identical pixels; GPU average was about **6.5% → 5.1%** and dedicated GPU memory
+**101 → 87 MB**. These are sample results, not guaranteed savings for every book.
+100%/125% DPI, zoom, narrow resize/right-edge pixels and 10× reversal checks passed.
 
 ## Agent-owned machinery
 

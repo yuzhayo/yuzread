@@ -75,6 +75,87 @@ try {
     );
   await setHeader(false);
   await page.mouse.move(450, 300);
+  const worker = page.workers()[0];
+  assert.ok(worker);
+  await worker.evaluate(() => {
+    globalThis.wheelCurve = [];
+    globalThis.curveStart = performance.now();
+    globalThis.captureCurve = true;
+    const post = globalThis.postMessage.bind(globalThis);
+    globalThis.postMessage = (value, ...args) => {
+      if (globalThis.captureCurve && value.kind === 'position') {
+        globalThis.wheelCurve.push({
+          ...value,
+          elapsed: performance.now() - globalThis.curveStart,
+        });
+        if (globalThis.wheelCurve.length > 512) globalThis.wheelCurve.shift();
+      }
+      return post(value, ...args);
+    };
+  });
+  await page.evaluate(async () => {
+    const v = document.querySelector('[data-reader-viewport]');
+    for (let n = 0; n < 20; n++) {
+      v.dispatchEvent(
+        new WheelEvent('wheel', { deltaY: 120, deltaMode: 0, bubbles: true, cancelable: true }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  });
+  const curve = await worker.evaluate(() => {
+    globalThis.captureCurve = false;
+    return globalThis.wheelCurve;
+  });
+  const stable = curve.filter((value) => value.elapsed >= 1100 && value.elapsed < 1800);
+  assert.ok(stable.length >= 10);
+  assert.ok(
+    stable.every((value) => value.gestureActive && value.moving && value.velocity > 0),
+    'nearby ticks must remain one active gesture',
+  );
+  const speeds = stable.map((value) => value.velocity),
+    mean = speeds.reduce((sum, n) => sum + n, 0) / speeds.length;
+  const ripple = (Math.max(...speeds) - Math.min(...speeds)) / mean;
+  assert.ok(ripple < 0.15, `live worker velocity must not retain per-notch sawtooth: ${ripple}`);
+  await page.waitForFunction(
+    () => document.querySelector('[data-reader-viewport]').dataset.readerWheelGesture === 'false',
+    null,
+    { timeout: 1000 },
+  );
+  await page.waitForFunction(
+    () => document.querySelector('[data-reader-viewport]').dataset.readerMoving === 'false',
+    null,
+    { timeout: 3000 },
+  );
+  const gestureTravel = await page.evaluate(
+    () => document.querySelector('[data-reader-viewport]').scrollTop,
+  );
+  assert.ok(
+    gestureTravel > 3500 && gestureTravel < 3700,
+    'joined movement must preserve about 180 pixels per ordinary notch',
+  );
+  // Precision input remains native, without a second gesture/inertia tail.
+  await page.mouse.wheel(0, 10);
+  await page.waitForTimeout(150);
+  assert.equal(
+    await page.locator('[data-reader-viewport]').getAttribute('data-reader-wheel-gesture'),
+    'false',
+  );
+  const preciseTop = await page.evaluate(
+    () => document.querySelector('[data-reader-viewport]').scrollTop,
+  );
+  await page.waitForTimeout(100);
+  assert.ok(
+    Math.abs(
+      (await page.evaluate(() => document.querySelector('[data-reader-viewport]').scrollTop)) -
+        preciseTop,
+    ) < 1,
+  );
+  await page.evaluate(() => {
+    const v = document.querySelector('[data-reader-viewport]');
+    v.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    v.scrollTop = 0;
+  });
+  await page.waitForTimeout(100);
   await page.mouse.wheel(0, 120);
   await page.waitForFunction(
     () => document.querySelector('[data-reader-viewport]').dataset.readerMoving === 'true',
@@ -180,11 +261,13 @@ try {
   const result = {
     verdict: 'PASS',
     checks: [
+      'live timestamped joined-wheel gesture with low velocity ripple, preserved travel, quiet coast and precision-input separation',
       'hover-independent popup; direct input/clamping; synchronized slider; reset=1x',
       '100=10x and immediate ongoing-momentum update without renderer restart',
       'draggable popup without moving native window; outside close preserves value; keyboard/Escape',
     ],
     evidence,
+    gesture: { ripple, meanVelocity: mean, travel: gestureTravel, samples: stable.length },
   };
   await writeFile(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
   console.log(JSON.stringify(result, null, 2));

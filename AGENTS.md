@@ -64,11 +64,56 @@ ownership, reasons and working rules; the reader plan records unfinished work.
 Transfer lasting decisions/status from completed task plans here, then remove the
 completed standalone plans. Do not accumulate redundant planning Markdown files.
 
-### Resource optimization — 2026-11-23, supersedes uncapped/high-refresh targets
+### Connected mouse-wheel gesture — current input behavior
 
-The operator now prefers a 60-update ceiling and the lowest practical CPU/GPU/RAM/
-VRAM without loss of resolution, colors, geometry or smooth scrolling. Do not restore
-uncapped/high-refresh rendering or blindly force WebGL alpha:false. Pass 1 adds
+The operator approved grouping nearby mouse-wheel ticks to remove the per-notch
+bump. BodyReaderPixi sends normalized coarse-wheel distance and a monotonic event
+timestamp aligned across window/worker with performance.timeOrigin. The worker/
+pure policy own one gesture: same-direction ticks within momentum.tickWindowMs
+(default 150, valid 50–300) update a smoothed rate rather than add sharp impulses.
+First input responds immediately; the window never batches/delays its start.
+Velocity blends over 40 ms, with 20-ms opposing-direction braking. Quiet input
+coasts on the existing 250-ms scale. Bounded signed distance credit preserves the
+1.5 gain/about 180 px per 120-unit notch and prevents runaway remaining travel.
+Reversal drops old-direction credit while retaining current velocity/position;
+speed changes scale velocity/rate/credit together. Tile waits do not spend credit.
+
+Stop/zoom/picker/blur/hidden/boundaries clear gesture state; no idle sensor timer.
+Keep precision small-delta/reduced-motion/direct inputs separate to avoid double
+touchpad inertia. No UI/native/dependency change or reintroduced FPS ceiling.
+The previous impulse helper remains a pure historical baseline, not the active
+worker controller. This supersedes earlier instructions to keep impulse math fixed.
+
+check:code, screen build, seven targeted motion/config tests and both existing
+Pixi/speed checks passed. New reference ripple 2.49–2.82% versus old 24.8–26.9%,
+same about-179-px isolated/about-3599-px 20-tick travel across 60/120/165 schedules.
+Live worker/input: 3.35% ripple, 3599 px travel, precision no-tail and live speed
+scaling passed (.runtime/scroll-speed-1795424156769/result.json).
+.runtime/reader-pixi-1795424201391/result.json covers pixels, chapter/zoom/resize/
+cleanup. These are waveform/functional checks, not universal feel/presented-FPS
+certification. reader-plan.md holds the tasklist and pending operator comparison.
+
+### Latest pacing decision — ceiling disabled for operator comparison
+
+The operator reports micro-breaks versus Citadel and explicitly requests disabling
+the 60-FPS ceiling. Current reader JSON maxFPS=0 and omission default to uncapped
+worker requestAnimationFrame pacing (browser/display VSync still applies). This
+supersedes the earlier 60-update preference below; do not restore a cap without an
+operator request. Zero bypasses deadline gating; positive 10–240 values remain valid
+if the operator later chooses a cap. Keep the current joined-gesture behavior, tile pool, culling, crop,
+resource reuse, obsolete-work checks and idle stopping unchanged. No GPU clock or
+global VSync override. The 60 cap on a 165-Hz display is a possible pacing cause,
+not a proven explanation for all reported micro-breaks. Operator feel comparison
+is pending; callback/frame-setting changes do not certify presented FPS.
+Fresh check:code, screen build, three focused uncapped/capped/momentum tests and
+Pixi interaction smoke passed (.runtime/reader-pixi-1795420618547/result.json).
+No new benchmark/full suite, GPU global override, commit or push was performed.
+
+### Resource optimization — 2026-11-23, historical 60-update target
+
+The earlier operator preference was a 60-update ceiling and the lowest practical CPU/GPU/RAM/
+VRAM without loss of resolution, colors, geometry or smooth scrolling. That ceiling
+is now disabled as recorded above. Do not blindly force WebGL alpha:false. Pass 1 added
 deadline-based maxFPS=60, per-tile culling, unchanged-frame skipping and bounded
 position publication. Pass 2 keeps single-level lossless 1024-pixel PNG disk tiles
 with one-pixel sampling borders and bounded visible/nearby/recent bitmap+texture
@@ -149,6 +194,36 @@ Evidence: .runtime/reader-resource-real-reuse-final-1795412590982/result.json,
 existing reader-plan.md. The existing resource test supports --archive, --warm-replay
 and --verify-reuse; no new proof app, library scan or full suite. Overall presented-
 frame/resource acceptance remains partial.
+
+Actual-work follow-up, same day: bridge/worker now crop horizontal empty canvas
+margins, not page pixels. Full logical viewport/geometry stays authoritative. The
+bridge caches the widest strip (including history) on layout changes; there is no
+page-box scan per ordinary scroll. Crop bounds include a physical sampling pixel
+and are DPR-grid aligned. Integer CSS dimensions plus a compositor matrix avoid
+fractional-DPI layout quantization. Only matching rendered-frame feedback applies
+the crop. Serialized resize waits for current required tiles and participates in
+graceful disposal; framebuffer admission conservatively covers the larger old/new
+size. No new budget or native/config/dependency change.
+
+The worker rechecks current/directional demand between reserve, fetch, bitmap decode
+and upload. Current pixels and warm pins stay protected. Obsolete work is not a tile
+failure; temporary bitmap/transferred texture cleanup runs in finally. Existing
+render feedback carries bounded skip byte estimates, not claimed CPU timing.
+
+The short same-book 1× sample reduced canvas 1320×1320 → 802×1320 while keeping the
+viewport/positions unchanged. Cleared pixel area fell 104.81 → 63.62 million/sec
+(about 39%); compared viewport pixels were identical. App GPU average was 6.48% →
+5.06%, dedicated GPU memory 101.46 → 87.16 MB. These are book-specific observations:
+graphics clocks were 270–345 MHz before/270 after, with memory at 7000 MHz/P0. Do not
+certify total CPU or universal GPU savings. Held obsolete tile tests performed zero
+bitmap decodes and retained pixels at 100%/125% DPI. Ten math/contract checks,
+check:code, screen build, Pixi and navigation smoke passed; 10× reversal/failure/retry
+had zero tile-blocked updates/idle redraws. New proof details and the earlier QA
+outer/content-size correction/coast-timeout limitation are in reader-plan.md.
+Evidence: .runtime/reader-resource-work-after-1795417969632/result.json,
+.runtime/reader-resource-work-fast-1795418927900/result.json and
+.runtime/reader-pixi-1795419639112/result.json. Keep the 60 ceiling, 128 MiB nominal
+tile pool, geometry/DPI, colors, zoom/speed and feature ownership unchanged.
 
 ### Pixi GPU reader migration — all-page rendering and momentum implemented
 
@@ -291,6 +366,33 @@ include this app's directory. The book/Y icon is native-only, never screen artwo
 
 ## Screen and feature ownership
 
+### Reader drag-drop — 2026-11-23
+
+BodyReader's viewport owns Files dragenter/dragover/drop listeners and single-CBZ
+selection. It prevents browser default navigation, rejects invalid/multiple drops
+without replacing readable content and ignores a new load while Open/navigation
+is active. Drop reuses openChapter's immutable geometry snapshot, staging/initial
+preparation/commit/error-resume/retirement and the same next-folder continuation;
+do not make a separate drag-drop decoder or change zoom/speed.
+
+The narrow dropOpen request forwards File+ReaderOpenOptions through Body/Screen.
+ShellHost.reader.drop is the only File-backed capability; native IPC still carries
+only a path/options. Preload resolves with Electron webUtils.getPathForFile and
+rejects fabricated File handles/empty paths. Never expose raw getPathForFile or
+trust a renderer-supplied File.path string. reader:open-file retains the top-frame
+trusted sender check and path/options validation. CbzArchive.open accepts the
+resolved dropped path, skips the dialog only, and reuses normal canonical catalog/
+archive/cache/source/budget/folder-memory logic. Invalid path requests must not
+fall through to the picker. Sandbox/context isolation remain on, Node off.
+
+Fresh check:code, both builds and schema check passed. The scoped UI/native check
+.runtime/reader-drop-1795451850343/result.json passed real disk-backed upper-case
+CBZ opening, default prevention/no dialog, actual colors, invalid/multiple/corrupt
+old-content survival, fabricated File rejection, next-folder continuation and
+zoom/speed-preserving replacement with one GPU canvas. Existing Load/Pixi smoke:
+.runtime/reader-pixi-1795451928649/result.json. No Setting Screen/full suite or
+installer/version/release changes. The OS opener remains a later explicit step.
+
 ### Bottom chapter navigation — 2026-11-23
 
 BottomBar is enabled as a transparent, non-draggable 4%-high bottom overlay at y=96,
@@ -327,6 +429,48 @@ pixels, resident/unloaded Previous/Next/list, boundary disables, no extra picker
 preserved zoom/speed and one GPU canvas. Popup screenshot inspected. No full suite
 or FPS benchmark. Existing reader-plan.md contains the requested tasklist; do not
 create a redundant standalone completed plan.
+
+### Setting Screen — 2026-11-23
+
+Latest section-card addition: the popup body now renders JSON-declared section
+cards, following the TIMEMAXX Input reference pattern (header label + collapse
+chevron, then a body). One "Display" card ships as the first entry. Card chrome
+lives in WindowsAreaBtnSettingScreen.tsx (createSectionCards/SettingScreenSectionCard);
+appearance comes from JSON presets sectionCard/sectionCardHeader/sectionCardBody.
+Collapsed cards keep their body mounted (hidden, not unmounted) so later settings
+retain their state. Card width/label/order are per section in `sections`; card visuals
+are shared parts, not per-section copies.
+
+Latest appearance correction: no visible "Setting Screen" title in the popup header;
+keep the screen's accessible name and right-side X. Header height is 28 px, with
+panel paddingX=1.8/paddingY=1.5 (about 8/5 px at 440×320). No Setting Screen tests
+were run for these operator-requested appearance changes.
+
+WindowsAreaBtnSettingScreen.tsx owns the far-left gear and persistent modeless popup.
+WindowsArea binds the child and forwards diagnostics only; no reader/native port or
+business controller was added. The settingScreen JSON child is at x=0.75%, with
+the existing speed/Load/default/Close placements unchanged. Shared ActionButton
+registers the MUI SettingsOutlined icon; there is no new dependency.
+
+One always-mounted Portal contains a draggable header, configured title/X row and
+an intentionally empty body. Outside click/Escape/top hover exit do not dismiss it.
+Gear opens/focuses; only X hides it. Hidden+inert remove the closed popup from focus/
+accessibility without destroying body nodes or session state. First opening anchors
+below the gear; later openings retain the dragged position. Resize clamps it to
+the viewport. Close/blur/unmount release pointer capture; close returns focus when
+the previous target is available. The close button never starts header/native drag.
+No file storage or persistence across app restarts. Future settings belong to this
+owner's BODY section; do not prepopulate unspecified settings or couple it to reader.
+
+Header/body/close parts, order/gap, sizing, icons/labels and visuals stay in JSON.
+The popup uses existing MUI Portal, ActionButton, ConfiguredRow and configuredSx;
+the reader, native window and speed panel are not recreated or retuned.
+check:code, screen build and four focused setting/config/placement tests passed.
+.runtime/setting-screen-1795427500334/result.json passed gear placement, actual
+header/X/empty-body UI, drag without moving the native window, header/outside/Escape
+survival, hidden inert nodes, retained position/body identity on reopening and
+unchanged reader geometry/renderer/native window count. Popup screenshot inspected.
+No full suite, benchmark, native/template/Chrome change or commit/push.
 
 ### Scroll-speed panel — 2026-11-23
 

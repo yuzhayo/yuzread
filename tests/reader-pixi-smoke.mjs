@@ -11,6 +11,8 @@ import { _electron } from 'playwright-core';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const evidence = path.join(root, '.runtime', `reader-pixi-${Date.now()}`);
 const appRoot = path.join(evidence, 'app');
+const dpiIndex = process.argv.indexOf('--dpi');
+const dpi = dpiIndex >= 0 ? Number(process.argv[dpiIndex + 1]) : 1;
 await mkdir(path.join(evidence, 'pages'), { recursive: true });
 for (let index = 0; index < 3; index++) {
   await sharp({
@@ -50,7 +52,7 @@ const errors = [];
 try {
   app = await _electron.launch({
     executablePath: path.join(root, 'node_modules/electron/dist/electron.exe'),
-    args: [appRoot, '--qa'],
+    args: [appRoot, '--qa', `--force-device-scale-factor=${dpi}`],
     cwd: appRoot,
     env,
     timeout: 15000,
@@ -100,12 +102,21 @@ try {
       canvasWidth: canvas.width,
       canvasHeight: canvas.height,
       revision: Number(canvas.dataset.pixiRevision),
+      canvasLeft: canvas.getBoundingClientRect().left,
+      imageLeft: box.left,
     };
   });
   assert.equal(initial.backend, 'webgl');
   assert.equal(initial.bitmapHidden, true);
   const ratio = await page.evaluate(() => devicePixelRatio);
-  assert.equal(initial.canvasWidth, Math.round(900 * ratio));
+  assert.equal(
+    initial.canvasWidth,
+    Math.min(Math.round(900 * ratio), Math.round(initial.width * ratio) + 2),
+  );
+  assert.ok(
+    Math.abs((initial.imageLeft - initial.canvasLeft) * ratio - 1) < 0.1,
+    'crop must retain the page origin and one sampling pixel',
+  );
   assert.equal(initial.canvasHeight, Math.round(700 * ratio));
   assert.equal(
     await page.evaluate(() =>
@@ -115,9 +126,11 @@ try {
     ),
     true,
   );
-  const screenshot = await canvas.screenshot({ path: path.join(evidence, 'gpu-first-page.png') });
+  const screenshot = await page
+    .locator('[data-reader-viewport]')
+    .screenshot({ path: path.join(evidence, 'gpu-first-page.png') });
   const center = await sharp(screenshot)
-    .extract({ left: 450, top: 300, width: 1, height: 1 })
+    .extract({ left: Math.round(450 * ratio), top: Math.round(300 * ratio), width: 1, height: 1 })
     .removeAlpha()
     .raw()
     .toBuffer();
@@ -127,6 +140,105 @@ try {
       Math.abs(center[2] - 57) <= 2,
     `GPU page pixel is ${[...center]}, not the prepared page color`,
   );
+  // Hold one newly exposed tile response, reverse the camera, then release it.
+  // Removing the stale-work checks would decode/upload this obsolete response.
+  await page.waitForFunction(
+    () => Number(document.querySelector('[data-reader-pixi]').dataset.pixiPages) >= 6,
+    null,
+    { timeout: 10000 },
+  );
+  await page.waitForTimeout(250);
+  const worker = page.workers()[0];
+  assert.ok(worker);
+  await worker.evaluate(() => {
+    globalThis.motionTrace = [];
+    const post = globalThis.postMessage.bind(globalThis);
+    globalThis.postMessage = (value, ...args) => {
+      if (value.kind === 'position') {
+        globalThis.motionTrace.push({ direction: 'out', ...value });
+        if (globalThis.motionTrace.length > 30) globalThis.motionTrace.shift();
+      }
+      return post(value, ...args);
+    };
+    globalThis.addEventListener('message', (event) => {
+      if (['wheel', 'stop', 'rebase'].includes(event.data.kind)) {
+        globalThis.motionTrace.push({ direction: 'in', ...event.data });
+        if (globalThis.motionTrace.length > 30) globalThis.motionTrace.shift();
+      }
+    });
+  });
+  const skippedBefore = Number(await canvas.getAttribute('data-pixi-skipped-decode-bytes'));
+  await worker.evaluate(() => {
+    const probe = { active: true, bitmapCalls: 0, release: null, heldResolve: null };
+    globalThis.tileProbe = probe;
+    globalThis.probeFetch = globalThis.fetch;
+    globalThis.probeBitmap = globalThis.createImageBitmap;
+    globalThis.probeHeld = new Promise((resolve) => (probe.heldResolve = resolve));
+    globalThis.fetch = async (...args) => {
+      const response = await globalThis.probeFetch(...args);
+      if (probe.active && String(args[0]).includes('://tile/')) {
+        probe.active = false;
+        probe.heldResolve();
+        await new Promise((resolve) => (probe.release = resolve));
+      }
+      return response;
+    };
+    globalThis.createImageBitmap = (...args) => {
+      probe.bitmapCalls++;
+      return globalThis.probeBitmap(...args);
+    };
+  });
+  let staleProbe;
+  try {
+    await page.evaluate(() => {
+      const v = document.querySelector('[data-reader-viewport]'),
+        slot = document.querySelectorAll('[data-reader-page]')[2];
+      v.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      v.scrollTop += slot.getBoundingClientRect().top - v.getBoundingClientRect().top + 40;
+    });
+    await worker.evaluate(() =>
+      Promise.race([
+        globalThis.probeHeld,
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('No future tile was intercepted')), 5000),
+        ),
+      ]),
+    );
+    await page.evaluate(() => {
+      const v = document.querySelector('[data-reader-viewport]');
+      v.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      v.scrollTop = 0;
+    });
+    await page.waitForTimeout(50);
+    await worker.evaluate(() => globalThis.tileProbe.release());
+    await page.waitForFunction(
+      (before) =>
+        Number(document.querySelector('[data-reader-pixi]').dataset.pixiSkippedDecodeBytes) >
+        before,
+      skippedBefore,
+      { timeout: 3000 },
+    );
+    staleProbe = await worker.evaluate(() => ({ bitmapCalls: globalThis.tileProbe.bitmapCalls }));
+    assert.equal(staleProbe.bitmapCalls, 0, 'obsolete tile response must not enter bitmap decode');
+    const returned = await page
+      .locator('[data-reader-viewport]')
+      .screenshot({ path: path.join(evidence, 'stale-return.png') });
+    const region = {
+      left: Math.round(40 * ratio),
+      top: Math.round(90 * ratio),
+      width: Math.round(820 * ratio),
+      height: Math.round(560 * ratio),
+    };
+    const a = await sharp(screenshot).extract(region).ensureAlpha().raw().toBuffer(),
+      b = await sharp(returned).extract(region).ensureAlpha().raw().toBuffer();
+    assert.ok(a.equals(b), 'stale response must preserve the complete returned page pixels');
+  } finally {
+    await worker.evaluate(() => {
+      globalThis.tileProbe?.release?.();
+      globalThis.fetch = globalThis.probeFetch;
+      globalThis.createImageBitmap = globalThis.probeBitmap;
+    });
+  }
   const top = () => page.evaluate(() => document.querySelector('[data-reader-viewport]').scrollTop);
   await page.mouse.move(450, 300);
   await page.mouse.wheel(0, 120);
@@ -171,8 +283,8 @@ try {
     );
   }
   await goToPage(1);
-  const green = await sharp(await canvas.screenshot())
-    .extract({ left: 450, top: 300, width: 1, height: 1 })
+  const green = await sharp(await page.locator('[data-reader-viewport]').screenshot())
+    .extract({ left: Math.round(450 * ratio), top: Math.round(300 * ratio), width: 1, height: 1 })
     .removeAlpha()
     .raw()
     .toBuffer();
@@ -242,10 +354,16 @@ try {
   const resetTop = await top();
   await page.waitForTimeout(120);
   assert.ok(Math.abs((await top()) - resetTop) < 1, 'zoom/reset must stop old momentum');
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(800, 650));
-  await page.waitForFunction(() => innerWidth === 800 && innerHeight === 650, null, {
-    timeout: 3000,
-  });
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].setContentSize(800, 650),
+  );
+  await page.waitForFunction(
+    () => Math.abs(innerWidth - 800) <= 1 && Math.abs(innerHeight - 650) <= 1,
+    null,
+    {
+      timeout: 3000,
+    },
+  );
   await page.waitForFunction(
     () => document.querySelector('[data-reader-pixi]').width === Math.round(800 * devicePixelRatio),
     null,
@@ -257,6 +375,46 @@ try {
   });
   assert.equal(after.width, initial.width);
   assert.equal(after.height, initial.height);
+  const edgeRevision = Number(await canvas.getAttribute('data-pixi-revision'));
+  await page.evaluate(() => {
+    const v = document.querySelector('[data-reader-viewport]');
+    v.scrollLeft = v.scrollWidth - v.clientWidth;
+  });
+  await page.waitForFunction(
+    (revision) =>
+      Number(document.querySelector('[data-reader-pixi]').dataset.pixiRevision) > revision,
+    edgeRevision,
+    { timeout: 3000 },
+  );
+  const edge = await page.evaluate(() => {
+    const v = document.querySelector('[data-reader-viewport]'),
+      image = document.querySelector('[data-reader-page="0"] img');
+    return {
+      right: image.getBoundingClientRect().right,
+      viewportRight: v.getBoundingClientRect().right,
+      width: v.clientWidth,
+    };
+  });
+  assert.ok(
+    Math.abs(edge.right - edge.viewportRight) < 1,
+    'narrow resize must still expose the real right page edge',
+  );
+  const rightPixel = await sharp(await page.locator('[data-reader-viewport]').screenshot())
+    .extract({
+      left: Math.round((edge.width - 8) * ratio),
+      top: Math.round(100 * ratio),
+      width: 1,
+      height: 1,
+    })
+    .removeAlpha()
+    .raw()
+    .toBuffer();
+  assert.ok(
+    Math.abs(rightPixel[0] - 219) <= 2 &&
+      Math.abs(rightPixel[1] - 73) <= 2 &&
+      Math.abs(rightPixel[2] - 57) <= 2,
+    'right-edge pixels must remain GPU rendered after horizontal scrolling',
+  );
   assert.deepEqual(errors, []);
   const gpu = await app.evaluate(({ app }) => app.getGPUFeatureStatus().gpu_compositing);
   assert.match(gpu, /^enabled/);
@@ -270,8 +428,11 @@ try {
       'real CBZ token -> worker ImageBitmap -> WebGL page pixels',
       'all six loaded pages use GPU resources, second-page pixels, momentum across chapter handoff and backward reload',
       'worker momentum coasts/stops, Ctrl+wheel/reset interruption, fixed resize geometry, GPU compositing and cleanup',
+      'cropped raster preserves origins/right edge; obsolete held tile response performs no bitmap decode and preserves pixels',
     ],
     initial,
+    staleProbe,
+    dpi: ratio,
     gpu,
     coverage: {
       stage: 'full-page Pixi rendering and momentum',
@@ -284,6 +445,16 @@ try {
   console.log(JSON.stringify(result, null, 2));
 } catch (error) {
   if (app) {
+    const worker = (await app.firstWindow()).workers()[0];
+    if (worker)
+      await writeFile(
+        path.join(evidence, 'motion.json'),
+        JSON.stringify(
+          await worker.evaluate(() => globalThis.motionTrace ?? []).catch(() => []),
+          null,
+          2,
+        ),
+      );
     const page = await app.firstWindow().catch(() => null);
     if (page)
       await writeFile(

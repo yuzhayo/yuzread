@@ -150,7 +150,7 @@ try {
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
   );
-  const pixels = await sharp(await page.locator('[data-reader-pixi]').screenshot())
+  const pixels = await sharp(await page.locator('[data-reader-viewport]').screenshot())
     .extract({ left: 450, top: 300, width: 1, height: 1 })
     .removeAlpha()
     .raw()

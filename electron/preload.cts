@@ -1,6 +1,6 @@
 // CONFIG AND CONTRACT — plain sandbox script: type queries emit no module imports.
 // The typed require adapter is restricted to Electron's known, sandbox-provided API.
-const { contextBridge, ipcRenderer }: typeof import('electron') = require('electron');
+const { contextBridge, ipcRenderer, webUtils }: typeof import('electron') = require('electron');
 type Wire = import('../ShellHost.js').InvokeChannels;
 type Events = import('../ShellHost.js').EventChannels;
 const preloadRecord = (value: unknown): value is Record<string, unknown> =>
@@ -188,6 +188,19 @@ const shellHost = {
   onSectionHover: (callback) => preloadSubscribe('shell:section-hover', callback, preloadStrings),
   reader: {
     open: (options) => preloadInvoke('reader:open', [options], preloadOpenResult),
+    drop: async (file, options) => {
+      try {
+        const filePath = webUtils.getPathForFile(file);
+        if (!filePath || !/\.cbz$/i.test(file.name))
+          return { ok: false, error: 'Drop a CBZ file from disk' };
+        return await preloadInvoke('reader:open-file', [filePath, options], preloadOpenResult);
+      } catch (error) {
+        return {
+          ok: false,
+          error: error instanceof Error ? error.message : 'Dropped file is unavailable',
+        };
+      }
+    },
     chapter: (catalogId, entryId, options, priority = 'background') =>
       preloadInvoke(
         'reader:chapter',

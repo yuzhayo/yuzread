@@ -5,6 +5,7 @@ import type {
   PixiPageTiming,
   PixiView,
 } from './BodyReaderPixiWorkerContract.js';
+import { horizontalRenderSpan } from './BodyReaderPixiWorkerPolicy.ts';
 
 // CONFIG AND CONTRACT — the reader supplies document data and narrow capabilities.
 export interface ReaderRenderPage {
@@ -17,6 +18,7 @@ export interface ReaderPixiOptions {
   speed: number;
   maxFPS: number;
   tileMemoryMB: number;
+  tickWindowMs: number;
   maxDecodedMB: number;
   getDocumentId(): string;
   getPages(): ReaderRenderPage[];
@@ -63,7 +65,23 @@ function validOutput(v: unknown): v is PixiOutput {
         integer(v.visiblePages) &&
         integer(v.residentTiles) &&
         integer(v.residentBytes) &&
-        integer(v.blockedFrames)
+        integer(v.blockedFrames) &&
+        integer(v.skippedTiles) &&
+        integer(v.skippedDecodeBytes) &&
+        integer(v.skippedUploadBytes) &&
+        record(v.frame) &&
+        typeof v.frame.left === 'number' &&
+        Number.isFinite(v.frame.left) &&
+        v.frame.left >= 0 &&
+        typeof v.frame.width === 'number' &&
+        Number.isFinite(v.frame.width) &&
+        v.frame.width > 0 &&
+        typeof v.frame.height === 'number' &&
+        Number.isFinite(v.frame.height) &&
+        v.frame.height > 0 &&
+        typeof v.frame.ratio === 'number' &&
+        Number.isFinite(v.frame.ratio) &&
+        v.frame.ratio > 0
       );
     case 'prepared':
       return (
@@ -90,7 +108,11 @@ function validOutput(v: unknown): v is PixiOutput {
         typeof v.speed === 'number' &&
         Number.isFinite(v.speed) &&
         v.speed >= 0.1 &&
-        v.speed <= 10
+        v.speed <= 10 &&
+        typeof v.velocity === 'number' &&
+        Number.isFinite(v.velocity) &&
+        Math.abs(v.velocity) <= 90000 &&
+        typeof v.gestureActive === 'boolean'
       );
     case 'failed':
     case 'tile-error':
@@ -104,6 +126,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
   const parent = view.parentElement;
   if (!parent) throw new Error('Reader is not mounted');
   const root = parent;
+  const strip = view.querySelector<HTMLElement>('[data-reader-pages]');
   const canvas = document.createElement('canvas');
   canvas.dataset.readerPixi = 'loading';
   canvas.setAttribute('role', 'img');
@@ -123,6 +146,17 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
   let baselineTop = view.scrollTop,
     documentId = '',
     layoutFrame: number | null = null;
+  // Cache the widest known strip, including history spacers; never read every page on scrolling.
+  let column: { left: number; width: number } | null = null;
+  let desiredFrame = {
+    left: 0,
+    width: Math.max(1, view.clientWidth),
+    height: Math.max(1, view.clientHeight),
+    ratio: window.devicePixelRatio || 1,
+  };
+  let displayedFrame = { ...desiredFrame },
+    canvasLeft = 0,
+    canvasTop = 0;
   let timer: number | null = null,
     closing: Promise<void> | null = null,
     completeClose: (() => void) | null = null;
@@ -145,32 +179,59 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     timer = null;
   };
   function measure(): PixiView {
+    const width = Math.max(1, view.clientWidth),
+      height = Math.max(1, view.clientHeight),
+      ratio = window.devicePixelRatio || 1;
+    const span = column
+      ? horizontalRenderSpan(width, ratio, column.left - view.scrollLeft, column.width)
+      : horizontalRenderSpan(width, ratio, 0, width);
+    desiredFrame = { left: span.left, width: span.width, height, ratio };
     return {
       revision: ++revision,
       control,
       documentId: options.getDocumentId(),
-      width: Math.max(1, view.clientWidth),
-      height: Math.max(1, view.clientHeight),
-      ratio: window.devicePixelRatio || 1,
+      width,
+      height,
+      ratio,
+      renderLeft: span.left,
+      renderWidth: span.width,
       x: view.scrollLeft,
       y: view.scrollTop,
       maxY: Math.max(0, view.scrollHeight - view.clientHeight),
     };
   }
+  function applyCanvasFrame() {
+    Object.assign(canvas.style, {
+      left: `${canvasLeft}px`,
+      top: `${canvasTop}px`,
+      // Integer layout dimensions plus a compositor transform avoid CSS's 1/64-pixel
+      // quantization moving a sampling border at fractional device scale factors.
+      width: `${Math.max(1, Math.round(displayedFrame.width * displayedFrame.ratio))}px`,
+      height: `${Math.max(1, Math.round(displayedFrame.height * displayedFrame.ratio))}px`,
+      transformOrigin: '0 0',
+      transform: `matrix(${1 / displayedFrame.ratio},0,0,${1 / displayedFrame.ratio},${displayedFrame.left},0)`,
+    });
+  }
   function positionCanvas() {
     const box = view.getBoundingClientRect(),
       parent = root.getBoundingClientRect();
-    Object.assign(canvas.style, {
-      left: `${box.left - parent.left + view.clientLeft}px`,
-      top: `${box.top - parent.top + view.clientTop}px`,
-      width: `${view.clientWidth}px`,
-      height: `${view.clientHeight}px`,
-    });
+    canvasLeft = box.left - parent.left + view.clientLeft;
+    canvasTop = box.top - parent.top + view.clientTop;
+    applyCanvasFrame();
   }
   function syncLayout() {
     if (closed) return;
     if (layoutFrame !== null) cancelAnimationFrame(layoutFrame);
     layoutFrame = null;
+    const bounds = view.getBoundingClientRect();
+    const extent = strip?.getBoundingClientRect();
+    column =
+      strip?.style.width && extent && extent.width > 0
+        ? {
+            left: extent.left - bounds.left - view.clientLeft + view.scrollLeft,
+            width: extent.width,
+          }
+        : null;
     const next = measure();
     if (documentId !== next.documentId) {
       documentId = next.documentId;
@@ -179,7 +240,6 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       view.dataset.readerMoving = 'false';
     }
     positionCanvas();
-    const bounds = view.getBoundingClientRect();
     const pages = options
       .getPages()
       .filter((entry) => entry.image.isConnected)
@@ -280,6 +340,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       kind: 'wheel',
       control: ++control,
       distance,
+      time: performance.timeOrigin + event.timeStamp,
       maxY: Math.max(0, view.scrollHeight - view.clientHeight),
     });
   }
@@ -356,6 +417,8 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       post({ version: 1, kind: 'ack', serial: message.serial });
       if (message.control !== control) return;
       view.dataset.workerSpeed = String(message.speed);
+      const active = String(message.gestureActive);
+      if (view.dataset.readerWheelGesture !== active) view.dataset.readerWheelGesture = active;
       if (!options.canScroll()) {
         if (message.moving) stop();
         return;
@@ -372,6 +435,23 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       canvas.dataset.pixiResidentTiles = String(message.residentTiles);
       canvas.dataset.pixiResidentBytes = String(message.residentBytes);
       canvas.dataset.pixiBlockedFrames = String(message.blockedFrames);
+      canvas.dataset.pixiSkippedTiles = String(message.skippedTiles);
+      canvas.dataset.pixiSkippedDecodeBytes = String(message.skippedDecodeBytes);
+      canvas.dataset.pixiSkippedUploadBytes = String(message.skippedUploadBytes);
+      const frame = message.frame;
+      if (
+        frame.left === desiredFrame.left &&
+        frame.width === desiredFrame.width &&
+        frame.height === desiredFrame.height &&
+        frame.ratio === desiredFrame.ratio &&
+        (frame.left !== displayedFrame.left ||
+          frame.width !== displayedFrame.width ||
+          frame.height !== displayedFrame.height ||
+          frame.ratio !== displayedFrame.ratio)
+      ) {
+        displayedFrame = frame;
+        applyCanvasFrame();
+      }
       if (message.visiblePages > 0) {
         canvas.dataset.readerPixi = 'ready';
         canvas.style.opacity = '1';
@@ -458,11 +538,11 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       speed,
       maxFPS: options.maxFPS,
       tileMemoryMB: options.tileMemoryMB,
+      tickWindowMs: options.tickWindowMs,
     },
     offscreen ? [offscreen] : [],
   );
   resize.observe(view);
-  const strip = view.querySelector('[data-reader-pages]');
   if (strip)
     mutation.observe(strip, {
       childList: true,

@@ -564,6 +564,16 @@ const imports = `import type {ShellHost, WindowOperation, PageMetadata, ReaderOp
 declare const result: ReaderOpenResult;`;
 const examples = [
   {
+    name: 'valid-drop-file',
+    expected: [],
+    code: `${imports}\nhost.reader.drop(new File(['bytes'],'chapter.cbz'),{renderWidth:800,maxDecodeWidth:1600,maxDecodedMB:64});`,
+  },
+  {
+    name: 'drop-rejects-raw-path',
+    expected: [2345],
+    code: `${imports}\nhost.reader.drop('C:/arbitrary.cbz',{renderWidth:800,maxDecodeWidth:1600,maxDecodedMB:64});`,
+  },
+  {
     name: 'valid',
     expected: [],
     code: `${imports}\nconst op: WindowOperation = 'restoreDefault'; host.windowAction(op); host.reader.prepare('id', 0, 800); host.reader.chapter('catalog','entry',{renderWidth:800,maxDecodeWidth:1600,maxDecodedMB:64}); const p: ChildProps<ReaderConfig,BodyReaderInput> = props; if (result.ok && 'chapter' in result) result.catalog.id;`,

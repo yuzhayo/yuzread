@@ -1,4 +1,5 @@
-// CONFIG AND CONTRACT — serialized data only; no imports or executable declarations.
+// CONFIG AND CONTRACT — type-only wire/capability declarations. File handles stay in
+// the renderer/preload boundary; native IPC receives only a resolved path and options.
 export interface Failure {
   ok: false;
   error: string;
@@ -70,6 +71,7 @@ export interface ReaderOpenOptions {
   picker?: ReaderPickerSettings;
   tileCache?: boolean;
 }
+export type ReaderDropRequest = [file: File, options: ReaderOpenOptions];
 export type ReaderOpenResult =
   | { ok: true; canceled: true }
   | { ok: true; chapter: Chapter; catalog: ReaderCatalog; budget?: ReaderBudget }
@@ -149,6 +151,10 @@ export interface InvokeChannels {
   'shell:diagnostics': { args: [records: DiagnosticRecord[]]; result: Result };
   'shell:startup-error': { args: [message: string]; result: Result };
   'reader:open': { args: [options: ReaderOpenOptions]; result: ReaderOpenResult };
+  'reader:open-file': {
+    args: [filePath: string, options: ReaderOpenOptions];
+    result: ReaderOpenResult;
+  };
   'reader:chapter': { args: ReaderChapterRequest; result: ReaderChapterResult };
   'reader:prepare': { args: ReaderPrepareRequest; result: ReaderPrepareResult };
   'reader:release': { args: [id: string]; result: Result };
@@ -173,6 +179,7 @@ export interface ShellHost {
   onSectionHover(callback: (sections: string[]) => void): () => void;
   reader: {
     open(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
+    drop(...request: ReaderDropRequest): Promise<ReaderOpenResult>;
     chapter(...request: ReaderChapterRequest): Promise<ReaderChapterResult>;
     prepare(...request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;
     release(id: string): Promise<Result>;
