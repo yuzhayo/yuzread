@@ -151,7 +151,9 @@ function inspect(source, options, emission = false) {
     !file.startsWith('screen/shared/') &&
     !['screen/main.tsx', 'screen/Screen.tsx', 'screen/environment.d.ts'].includes(file);
   const owner = ownerOf(file),
-    isParent = owner?.file === file;
+    isParent = owner?.file === file,
+    baseName = path.posix.basename(file).replace(/\.[^.]+$/, ''),
+    isOwnerContract = Boolean(owner && baseName === `${owner.name}Contract`);
   /** @type {Violation[]} */
   const found = [];
   /** @param {ts.Node} node @param {string} rule @param {string} message */
@@ -196,32 +198,51 @@ function inspect(source, options, emission = false) {
     if (feature && targetFeature && target !== file) {
       const targetOwner = ownerOf(target),
         basename = path.posix.basename(target).replace(/\.[^.]+$/, '');
-      const ownPrivate = basename.startsWith(path.posix.basename(file).replace(/\.[^.]+$/, ''));
+      const ownPrivate = basename.startsWith(baseName),
+        ownerContract = Boolean(
+          owner && targetOwner?.file === owner.file && basename === `${owner.name}Contract`,
+        );
       if (
         !owner ||
         targetOwner?.file !== owner.file ||
-        (!isParent && !ownPrivate) ||
-        (isParent && !basename.startsWith(owner.name))
+        (isParent && !ownerContract) ||
+        (!isParent && !ownPrivate && !(typeOnly && ownerContract))
       )
         report(
           node,
           'SIBLING_IMPORT',
-          'Only a declared parent may import its direct feature children',
+          'Features use their own private files or type-only owner contracts, never siblings',
         );
     }
     if (
       feature &&
       !isParent &&
+      !isOwnerContract &&
       !typeOnly &&
       ['screen/shared/logic/ParentConnections.ts', 'screen/shared/logic/AreaDiscovery.ts'].includes(
         target,
       )
-    )
-      report(
-        node,
-        'LEAF_ROUTING_ENGINE',
-        'Leaf controls receive callbacks, not parent routing engines',
-      );
+    ) {
+      const bindings = ts.isImportDeclaration(node) ? node.importClause?.namedBindings : undefined;
+      const allowed =
+        bindings &&
+        ts.isNamedImports(bindings) &&
+        bindings.elements.every((part) =>
+          target.endsWith('AreaDiscovery.ts')
+            ? ['acceptCommonConfig', 'defineChild'].includes(
+                part.propertyName?.text ?? part.name.text,
+              )
+            : ['hasRequestPort', 'hasStatePort'].includes(
+                part.propertyName?.text ?? part.name.text,
+              ),
+        );
+      if (!allowed)
+        report(
+          node,
+          'LEAF_ROUTING_ENGINE',
+          'Leaf controls may self-register and inspect named ports, not instantiate routing engines',
+        );
+    }
     if (
       feature &&
       !isParent &&
@@ -350,8 +371,6 @@ function inspect(source, options, emission = false) {
         'ScreenState',
         'ParentBinding',
         'ParentPort',
-        'RequestPort',
-        'StatePort',
         'ScreenInput',
       ].includes(node.typeName.text)
     )
@@ -501,23 +520,17 @@ function inspect(source, options, emission = false) {
   }
   if (feature && owner && !path.posix.basename(file).startsWith(owner.name))
     report(source, 'CHILD_NAME_PREFIX', `Feature filename must inherit ${owner.name}`);
-  if (feature && owner && !isParent) {
-    const parentSource = screen.program.getSourceFile(path.join(root, owner.file));
-    const importedByParent = parentSource?.statements.some(
+  if (feature && owner && !isParent && exportedString(source, 'componentId')) {
+    const registered = source.statements.some(
       (statement) =>
-        ts.isImportDeclaration(statement) &&
-        ts.isStringLiteral(statement.moduleSpecifier) &&
-        normalize(
-          ts.resolveModuleName(
-            statement.moduleSpecifier.text,
-            parentSource.fileName,
-            screen.parsed.options,
-            ts.sys,
-          ).resolvedModule?.resolvedFileName ?? '',
-        ) === normalize(source.fileName),
+        ts.isVariableStatement(statement) &&
+        statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
+        statement.declarationList.declarations.some(
+          (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === 'child',
+        ),
     );
-    if (exportedString(source, 'componentId') && !importedByParent)
-      report(source, 'ORPHAN_CHILD', 'Declared child must be imported/bound by its owning parent');
+    if (!registered)
+      report(source, 'ORPHAN_CHILD', 'Declared child must export its parent-local registration');
   }
   return found;
 }
@@ -559,7 +572,7 @@ violations.push(...inspect(emittedSource, native.parsed.options, true));
 // SELF-PROOF — real public/owner contracts; no live mutation or suppressed errors.
 const imports = `import type {ShellHost, WindowOperation, PageMetadata, ReaderOpenResult} from './ShellHost.js';
  import type {ChildProps} from './screen/shared/logic/AreaDiscovery.ts';
- import type {ReaderConfig,BodyReaderInput} from './screen/body/reader/BodyReader.tsx';
+ import type {ReaderConfig,BodyReaderInput} from './screen/reader/body/reader/BodyReader.tsx';
  declare const host: ShellHost; declare const props: ChildProps<ReaderConfig,BodyReaderInput>;
 declare const result: ReaderOpenResult;`;
 const examples = [
@@ -662,7 +675,7 @@ const examples = [
   {
     name: 'feature-binding',
     expected: [2345],
-    code: `${imports}\nimport BodyReader from './screen/body/reader/BodyReader.tsx'; import {bindChild,acceptCommonConfig} from './screen/shared/logic/AreaDiscovery.ts'; bindChild(BodyReader,acceptCommonConfig,{componentId:'test',fileName:'BodyReader.tsx'},()=>props.input);`,
+    code: `${imports}\nimport BodyReader from './screen/reader/body/reader/BodyReader.tsx'; import {defineChild,acceptCommonConfig} from './screen/shared/logic/AreaDiscovery.ts'; defineChild('Body',BodyReader,acceptCommonConfig,{componentId:'test'},(value:unknown):value is unknown=>true,()=>props.input);`,
   },
   {
     name: 'parent-callback',
@@ -735,17 +748,17 @@ assert.deepEqual(
 );
 const boundaryExamples = [
   {
-    file: 'screen/body/reader/BodyReaderPixiWorker.ts',
+    file: 'screen/reader/body/reader/BodyReaderPixiWorker.ts',
     code: 'document.createElement("canvas");',
     rule: 'WORKER_DOM_GLOBAL',
   },
   {
-    file: 'screen/body/reader/BodyReaderPixiWorker.ts',
+    file: 'screen/reader/body/reader/BodyReaderPixiWorker.ts',
     code: "import React from 'react';",
     rule: 'WORKER_UI_IMPORT',
   },
   {
-    file: 'screen/body/reader/BodyReaderPixi.ts',
+    file: 'screen/reader/body/reader/BodyReaderPixi.ts',
     code: 'new Worker(getUntrackedUrl());',
     rule: 'WORKER_ENTRY',
   },
@@ -778,17 +791,22 @@ const boundaryExamples = [
   },
   { file: 'screen/check-fixture.ts', code: 'process.pid;', rule: 'SCREEN_NATIVE_GLOBAL' },
   {
-    file: 'screen/windows-area/WindowsAreaBtnClose.tsx',
+    file: 'screen/reader/windows-area/WindowsAreaBtnClose.tsx',
     code: "import WindowsAreaBtnLoad from './WindowsAreaBtnLoad.tsx';",
     rule: 'SIBLING_IMPORT',
   },
   {
-    file: 'screen/windows-area/WindowsAreaBtnDefaultSize.tsx',
+    file: 'screen/reader/windows-area/WindowsAreaBtnDefaultSize.tsx',
     code: "export type {WindowsAreaCloseInput} from './WindowsAreaBtnClose.tsx';",
     rule: 'SIBLING_IMPORT',
   },
   {
-    file: 'screen/windows-area/WindowsArea.tsx',
+    file: 'screen/reader/windows-area/WindowsArea.tsx',
+    code: "import WindowsAreaBtnLoad from './WindowsAreaBtnLoad.tsx';",
+    rule: 'SIBLING_IMPORT',
+  },
+  {
+    file: 'screen/reader/windows-area/WindowsArea.tsx',
     code: "import Body from '../body/Body.tsx';",
     rule: 'SIBLING_IMPORT',
   },
@@ -803,28 +821,28 @@ const boundaryExamples = [
     rule: 'CENTRAL_AREA_REGISTRY',
   },
   {
-    file: 'screen/windows-area/WindowsAreaBtnClose.tsx',
+    file: 'screen/reader/windows-area/WindowsAreaBtnClose.tsx',
     code: "import {createRequest} from '@logic/ParentConnections.ts';",
     rule: 'LEAF_ROUTING_ENGINE',
   },
   {
-    file: 'screen/windows-area/WindowsAreaBtnLoad.tsx',
+    file: 'screen/reader/windows-area/WindowsAreaBtnLoad.tsx',
     code: "window['shellHost'].reader.open({});",
     rule: 'FEATURE_GLOBAL_ACCESS',
   },
   {
-    file: 'screen/windows-area/BadName.tsx',
+    file: 'screen/reader/windows-area/BadName.tsx',
     code: 'export const unrelated=1;',
     rule: 'CHILD_NAME_PREFIX',
   },
   { file: 'screen/unowned/Lost.tsx', code: 'export const orphan=1;', rule: 'ORPHAN_FEATURE' },
   {
-    file: 'screen/windows-area/WindowsAreaBtnLoad.tsx',
+    file: 'screen/reader/windows-area/WindowsAreaBtnLoad.tsx',
     code: "import {validateScreenConfig} from '@logic/ConfigValidation.ts';",
     rule: 'LEAF_ROUTING_ENGINE',
   },
   {
-    file: 'screen/windows-area/WindowsAreaBtnClose.tsx',
+    file: 'screen/reader/windows-area/WindowsAreaBtnClose.tsx',
     code: "import type {ShellHost} from '../../ShellHost.js'; declare const props: ShellHost;",
     rule: 'BROAD_CHILD_SCOPE',
   },
@@ -858,7 +876,7 @@ console.log(
         'strict compiler policy',
         'all production covered',
         'resolved import ownership',
-        'typed area/child binding and parent-only imports',
+        'typed parent-local child self-registration and import ownership',
         'no suppression/any/casts',
         'sandboxed preload emission',
         'positive/negative contract self-proof',

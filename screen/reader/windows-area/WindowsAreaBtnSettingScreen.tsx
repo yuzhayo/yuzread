@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { PointerEvent, ReactNode } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import type { PointerEvent } from 'react';
 import Box from '@mui/material/Box';
 import Portal from '@mui/material/Portal';
 import ActionButton, { hasActionIcon } from '@ui/ActionButton.tsx';
@@ -8,10 +8,32 @@ import { configuredSx } from '@logic/Appearance.ts';
 import { finite, isObject } from '@logic/VisualConfig.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
 import type { ResolvedConfig, ResolvedPart } from '@logic/ConfigValidation.ts';
+import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ChildProps, ConfigReport } from '@logic/AreaDiscovery.ts';
 import type { DiagnosticIssue } from '@logic/Diagnostics.ts';
+import { hasRequestPort, hasStatePort } from '@logic/ParentConnections.ts';
+import type { RequestPort, StatePort } from '@logic/ParentConnections.ts';
+import type { ReaderNumberSettingChange, Result } from '../../../ShellHost.js';
+import {
+  discoverSettingSections,
+  type WindowsAreaSettingSection,
+} from './setting-screen/WindowsAreaBtnSettingScreenSections.ts';
 
-// CONFIG AND CONTRACT — one local gear/popup owner; no reader/native settings yet.
+const settingSectionModules = import.meta.env
+  ? import.meta.glob('./setting-screen/*.tsx', { eager: true })
+  : {};
+const settingSections = discoverSettingSections(settingSectionModules);
+const settingSection = (value: unknown): value is WindowsAreaSettingSection =>
+  isObject(value) &&
+  typeof value.id === 'string' &&
+  /^[A-Za-z][\w.-]*$/.test(value.id) &&
+  typeof value.componentId === 'string' &&
+  /^[a-z][A-Za-z0-9.-]*$/.test(value.componentId) &&
+  typeof value.label === 'string' &&
+  Boolean(value.label.trim()) &&
+  typeof value.expanded === 'boolean';
+
+// CONFIG AND CONTRACT — one local gear/popup owner with locally discovered section bodies.
 export const componentId = 'window.settingScreen';
 export const partKeys = [
   'panel',
@@ -22,16 +44,14 @@ export const partKeys = [
   'card',
   'cardHeader',
   'cardBody',
+  'smoothReset',
+  'smoothSlider',
+  'smoothValue',
 ] as const;
 const headerParts = ['title', 'close'] as const;
 type HeaderPart = (typeof headerParts)[number];
 const labelKeys = ['title', 'close', 'drag'] as const;
 export const configKeys = ['icon', 'closeIcon', 'order', 'gap', 'popup', 'labels', 'sections'];
-export interface SettingScreenSection {
-  id: string;
-  label: string;
-  expanded: boolean;
-}
 export interface WindowsAreaSettingScreenConfig extends ResolvedConfig {
   icon: string;
   closeIcon: string;
@@ -47,9 +67,11 @@ export interface WindowsAreaSettingScreenConfig extends ResolvedConfig {
   };
   labels: Record<(typeof labelKeys)[number], string>;
   parts: Record<(typeof partKeys)[number], ResolvedPart>;
-  sections: SettingScreenSection[];
+  sections: WindowsAreaSettingSection[];
 }
 export interface WindowsAreaSettingScreenInput {
+  smoothDurationMs: number | null;
+  requestSmoothDuration(change: ReaderNumberSettingChange): Promise<Result>;
   report(issue: DiagnosticIssue): void;
 }
 export function validateConfig(
@@ -89,25 +111,60 @@ export function validateConfig(
   if (!Array.isArray(config.sections) || config.sections.length > 32)
     reject('sections', 'array of section cards', config.sections);
   else {
-    const ids = new Set<string>();
+    const ids = new Set<string>(),
+      components = new Set<string>();
     for (const section of config.sections) {
       if (
-        !isObject(section) ||
-        typeof section.id !== 'string' ||
-        !/^[A-Za-z][\w.-]*$/.test(section.id) ||
+        !settingSection(section) ||
         ids.has(section.id) ||
-        typeof section.label !== 'string' ||
-        !section.label.trim() ||
-        typeof section.expanded !== 'boolean'
+        components.has(section.componentId) ||
+        !section.label.trim()
       ) {
-        reject('sections', 'unique id, label and expanded state per section card', section);
+        reject(
+          'sections',
+          'unique id/componentId, label and expanded state per section card',
+          section,
+        );
         break;
       }
       ids.add(section.id);
+      components.add(section.componentId);
+      const definition = settingSections.get(section.componentId);
+      if (settingSections.size && (!definition || !definition.validate(section, report))) {
+        valid = false;
+        break;
+      }
     }
   }
   return valid;
 }
+
+// CHILD REGISTRATION — the popup receives only the matching smooth-scroll request/state.
+interface WindowsAreaSettingScreenPorts {
+  setSmoothScrollDuration: RequestPort<ReaderNumberSettingChange, Result>;
+  smoothScrollDuration: StatePort<number | null>;
+}
+const acceptsParentPorts = (value: unknown): value is WindowsAreaSettingScreenPorts =>
+  hasRequestPort(
+    value,
+    'setSmoothScrollDuration',
+    'ui.reader.smooth-duration.input',
+    'ui.reader.smooth-duration.output',
+  ) && hasStatePort(value, 'smoothScrollDuration', 'ui.reader.smooth-duration.state');
+export const child = defineChild(
+  'WindowsArea',
+  WindowsAreaBtnSettingScreen,
+  validateConfig,
+  { componentId, configKeys, partKeys },
+  acceptsParentPorts,
+  (ports, report) => ({
+    smoothDurationMs: ports.smoothScrollDuration.getSnapshot(),
+    requestSmoothDuration: ports.setSmoothScrollDuration.request,
+    report,
+  }),
+);
+
+// LOGIC AND CALCULATIONS — deterministic position and section-state transformations.
 export function clampSettingScreenPosition(
   position: { x: number; y: number },
   width: number,
@@ -121,115 +178,10 @@ export function clampSettingScreenPosition(
   };
 }
 
-// LOGIC — the visible collapse state, kept in React state so the chevron and body re-render.
-export function initialSectionState(sections: readonly SettingScreenSection[]) {
-  return Object.fromEntries(sections.map((section) => [section.id, section.expanded]));
-}
-export function toggleSectionState(current: Record<string, boolean>, id: string) {
-  return { ...current, [id]: !(current[id] ?? false) };
-}
-export function useSectionCards(sections: readonly SettingScreenSection[]) {
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
-    initialSectionState(sections),
-  );
-  const known = useRef(new Set(sections.map((section) => section.id)));
-  useEffect(() => {
-    const ids = new Set(sections.map((section) => section.id));
-    let changed = false;
-    for (const section of sections)
-      if (!known.current.has(section.id)) {
-        known.current.add(section.id);
-        changed = true;
-      }
-    for (const id of [...known.current])
-      if (!ids.has(id)) {
-        known.current.delete(id);
-        changed = true;
-      }
-    if (!changed) return;
-    setExpanded((current) => {
-      const next = { ...current };
-      for (const section of sections)
-        if (next[section.id] === undefined) next[section.id] = section.expanded;
-      for (const id of Object.keys(next)) if (!ids.has(id)) delete next[id];
-      return next;
-    });
-  }, [sections]);
-  return {
-    isExpanded: (id: string) => expanded[id] ?? false,
-    toggle: (id: string) => setExpanded((current) => toggleSectionState(current, id)),
-  };
-}
-
-// UI — shared card chrome: click the configured header to collapse/expand its body.
-export function SettingScreenSectionCard({
-  section,
-  expanded,
-  onToggle,
-  parts,
-  children,
-}: {
-  section: SettingScreenSection;
-  expanded: boolean;
-  onToggle: () => void;
-  parts: { card: ResolvedPart; header: ResolvedPart; body: ResolvedPart };
-  children?: ReactNode;
-}) {
-  return (
-    <Box
-      data-setting-section={section.id}
-      sx={{
-        ...configuredSx(parts.card),
-        flexDirection: 'column',
-        alignItems: 'stretch',
-        justifyContent: 'flex-start',
-        width: '100%',
-        flexShrink: 0,
-      }}
-    >
-      <Box
-        component="button"
-        type="button"
-        data-setting-section-header
-        aria-expanded={expanded}
-        onClick={onToggle}
-        sx={{
-          ...configuredSx(parts.header),
-          width: '100%',
-          flexShrink: 0,
-          font: 'inherit',
-          cursor: 'pointer',
-          textAlign: 'inherit',
-          justifyContent: 'space-between',
-        }}
-      >
-        <Box
-          component="span"
-          sx={{ minWidth: 0, flex: '1 1 auto', textAlign: parts.header.visual.content.textAlign }}
-        >
-          {section.label}
-        </Box>
-      </Box>
-      <Box
-        data-setting-section-body
-        hidden={!expanded}
-        sx={{
-          ...configuredSx(parts.body),
-          display: expanded ? 'flex' : 'none',
-          width: '100%',
-          flex: '0 1 auto',
-          minHeight: 0,
-        }}
-      >
-        {children}
-      </Box>
-    </Box>
-  );
-}
-
-// LOGIC — close hides the mounted portal; reopening retains position and future body state.
+// STATE AND COORDINATION — popup visibility, position, focus and drag state stay local.
 export default function WindowsAreaBtnSettingScreen({
   config,
+  input,
 }: ChildProps<WindowsAreaSettingScreenConfig, WindowsAreaSettingScreenInput>) {
   const anchor = useRef<HTMLDivElement>(null),
     panel = useRef<HTMLDivElement>(null),
@@ -239,7 +191,6 @@ export default function WindowsAreaBtnSettingScreen({
     position = useRef({ x: 0, y: 0 });
   const previousFocus = useRef<HTMLElement | null>(null);
   const sections = config.sections;
-  const cards = useSectionCards(sections);
   const dragging = useRef<{ id: number; x: number; y: number; left: number; top: number } | null>(
     null,
   );
@@ -292,7 +243,8 @@ export default function WindowsAreaBtnSettingScreen({
     if (previousFocus.current?.isConnected) previousFocus.current.focus({ preventScroll: true });
   };
 
-  // DRAG — only the blank header moves this popup, never the native window.
+  // UI AND LOCAL EVENTS — DRAG
+  // Only the blank header moves this popup, never the native window.
   const down = (event: PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0 || (event.target instanceof Element && event.target.closest('button')))
       return;
@@ -318,6 +270,8 @@ export default function WindowsAreaBtnSettingScreen({
   const up = (event: PointerEvent<HTMLDivElement>) => {
     if (dragging.current?.id === event.pointerId) finishDrag();
   };
+
+  // LIFECYCLE AND CLEANUP — clamp on resize and release pointer/focus resources.
   useEffect(() => {
     clampPosition();
     window.addEventListener('resize', clampPosition);
@@ -331,6 +285,8 @@ export default function WindowsAreaBtnSettingScreen({
   useEffect(() => {
     if (open) header.current?.focus({ preventScroll: true });
   }, [open]);
+
+  // LOGIC AND CALCULATIONS — derive configured header/card views without owning layout policy.
   const headerConfig = {
     ...config,
     label: config.labels.title,
@@ -341,8 +297,21 @@ export default function WindowsAreaBtnSettingScreen({
     header: config.parts.cardHeader,
     body: config.parts.cardBody,
   };
+  const controlParts = {
+    reset: config.parts.smoothReset,
+    slider: config.parts.smoothSlider,
+    value: config.parts.smoothValue,
+  };
+  const sectionContext = {
+    owner: config,
+    cardParts,
+    controlParts,
+    smoothDurationMs: input.smoothDurationMs,
+    requestSmoothDuration: input.requestSmoothDuration,
+    report: input.report,
+  };
 
-  // UI — always-mounted modeless screen. Outside clicks/header hover/Escape do not dismiss it.
+  // UI AND LOCAL EVENTS — always-mounted modeless screen; only its configured X dismisses it.
   return (
     <Box ref={anchor} role="presentation" className="fill">
       <ActionButton
@@ -435,13 +404,9 @@ export default function WindowsAreaBtnSettingScreen({
               }}
             >
               {sections.map((section) => (
-                <SettingScreenSectionCard
-                  key={section.id}
-                  section={section}
-                  parts={cardParts}
-                  expanded={cards.isExpanded(section.id)}
-                  onToggle={() => cards.toggle(section.id)}
-                />
+                <Fragment key={section.id}>
+                  {settingSections.get(section.componentId)?.render(section, sectionContext)}
+                </Fragment>
               ))}
             </Box>
           </Box>

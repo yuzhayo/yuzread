@@ -48,6 +48,49 @@ export interface ParentBinding {
   dispose(): void;
 }
 
+// CONFIG AND CONTRACT — child registration may inspect only named compatible ports.
+const portRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+export function hasRequestPort<K extends string>(
+  value: unknown,
+  name: K,
+  input: string,
+  output: string,
+): value is Record<K, RequestPort<unknown, unknown>> {
+  if (!portRecord(value)) return false;
+  const port = value[name];
+  return (
+    portRecord(port) &&
+    portRecord(port.endpoint) &&
+    port.endpoint.kind === 'request' &&
+    port.endpoint.input === input &&
+    port.endpoint.output === output &&
+    typeof port.request === 'function' &&
+    typeof port.register === 'function' &&
+    typeof port.settle === 'function' &&
+    typeof port.dispose === 'function'
+  );
+}
+export function hasStatePort<K extends string>(
+  value: unknown,
+  name: K,
+  contractId: string,
+): value is Record<K, StatePort<unknown>> {
+  if (!portRecord(value)) return false;
+  const port = value[name];
+  return (
+    portRecord(port) &&
+    portRecord(port.endpoint) &&
+    port.endpoint.kind === 'state' &&
+    port.endpoint.value === contractId &&
+    typeof port.publish === 'function' &&
+    typeof port.getSnapshot === 'function' &&
+    typeof port.subscribe === 'function' &&
+    typeof port.settle === 'function' &&
+    typeof port.dispose === 'function'
+  );
+}
+
 // LOGIC — closures belong to one parent instance; typed handlers keep their contracts.
 export function createRequest<A, R>(
   input: ValueContract<A>,

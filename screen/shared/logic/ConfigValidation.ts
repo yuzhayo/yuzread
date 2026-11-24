@@ -161,6 +161,14 @@ export function resolveChildren<P>(
     actual: unknown,
     meta: Omit<DiagnosticIssue, 'code'> = {},
   ) => diagnostics.report({ code, configPath: path, expected, actual, ...meta });
+  for (const componentId of duplicateDefinitions)
+    report(
+      'DUPLICATE_CHILD_DEFINITION',
+      area.configPath,
+      'one discovered child registration per component ID',
+      componentId,
+      { componentId, parentId: area.id, filePath: area.filePath },
+    );
   const resolve = (
     node: unknown,
     parentId: string,

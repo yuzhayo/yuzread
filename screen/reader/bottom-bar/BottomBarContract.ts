@@ -1,25 +1,13 @@
-import { useSyncExternalStore } from 'react';
-import { AreaChildren } from '@ui/AreaLayout.tsx';
-import { acceptCommonConfig, bindArea, bindChild } from '@logic/AreaDiscovery.ts';
-import type { AreaProps } from '@logic/AreaDiscovery.ts';
-import { contract, createState, createRequest } from '@logic/ParentConnections.ts';
+import { contract, createRequest, createState } from '@logic/ParentConnections.ts';
 import { isObject } from '@logic/VisualConfig.ts';
 import type {
   DiagnosticRecord,
   ReaderNavigationRequest,
   ReaderNavigationState,
   Result,
-} from '../../ShellHost.js';
-import BottomBarChapterNavigation, {
-  componentId as navigationId,
-  configKeys,
-  partKeys,
-  validateConfig,
-} from './BottomBarChapterNavigation.tsx';
-import BottomBarStatus, { componentId } from './BottomBarStatus.tsx';
+} from '../../../ShellHost.js';
 
-export const areaId = 'bottomBar';
-export const parentName = 'BottomBar';
+// CONFIG AND CONTRACT — BottomBar's relay ports; no navigation or status UI policy.
 const diagnostic = (v: unknown): v is DiagnosticRecord =>
   isObject(v) &&
   [
@@ -38,7 +26,8 @@ const diagnostic = (v: unknown): v is DiagnosticRecord =>
     'message',
   ].every((key) => typeof v[key] === 'string') &&
   typeof v.count === 'number';
-const createPorts = () => ({
+
+export const createBottomBarPorts = () => ({
   navigateChapter: createRequest(
     contract(
       'ui.reader.navigation.input',
@@ -89,29 +78,5 @@ const createPorts = () => ({
     { ready: '', issues: '' },
   ),
 });
-type Ports = ReturnType<typeof createPorts>;
-const children = [
-  bindChild(
-    BottomBarChapterNavigation,
-    validateConfig,
-    { componentId: navigationId, fileName: 'BottomBarChapterNavigation.tsx', configKeys, partKeys },
-    (ports: Ports, report) => ({
-      state: ports.navigation.getSnapshot(),
-      requestNavigation: ports.navigateChapter.request,
-      report,
-    }),
-  ),
-  bindChild(
-    BottomBarStatus,
-    acceptCommonConfig,
-    { componentId, fileName: 'BottomBarStatus.tsx' },
-    (ports: Ports) => ({ issues: ports.issues.getSnapshot(), labels: ports.labels.getSnapshot() }),
-  ),
-];
-export default function BottomBar({ config, ports, report }: AreaProps<Ports>) {
-  useSyncExternalStore(ports.issues.subscribe, ports.issues.getSnapshot);
-  useSyncExternalStore(ports.labels.subscribe, ports.labels.getSnapshot);
-  useSyncExternalStore(ports.navigation.subscribe, ports.navigation.getSnapshot);
-  return <AreaChildren nodes={config.nodes} ports={ports} report={report} />;
-}
-export const bind = bindArea(BottomBar, children, createPorts);
+
+export type BottomBarPorts = ReturnType<typeof createBottomBarPorts>;

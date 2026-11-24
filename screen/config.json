@@ -164,7 +164,7 @@
     {
       "id": "windowsBar",
       "parentId": "window",
-      "folder": "windows-area",
+      "folder": "reader/windows-area",
       "label": "Windows drag area",
       "enabled": true,
       "draggable": true,
@@ -202,9 +202,28 @@
           },
           "sections": [
             {
-              "id": "display",
-              "label": "Display",
-              "expanded": true
+              "id": "smoothScroll",
+              "componentId": "reader.smoothScroll",
+              "label": "Smooth scroll",
+              "expanded": true,
+              "preference": {
+                "id": "smoothScrollDurationMs",
+                "kind": "number",
+                "default": 250,
+                "min": 100,
+                "max": 2000,
+                "step": 10
+              },
+              "order": ["reset", "slider", "value"],
+              "gap": 3,
+              "rowHeight": 38,
+              "slider": { "thumbSize": 14, "trackSize": 3 },
+              "labels": {
+                "reset": "Reset",
+                "slider": "Smooth-scroll duration",
+                "value": "Smooth-scroll duration value",
+                "unit": "ms"
+              }
             }
           ],
           "parts": {
@@ -226,7 +245,10 @@
               "preset": "sectionCardHeader",
               "size": { "width": 100, "height": 100 }
             },
-            "cardBody": { "preset": "sectionCardBody", "size": { "width": 100, "height": 100 } }
+            "cardBody": { "preset": "sectionCardBody", "size": { "width": 100, "height": 100 } },
+            "smoothReset": { "preset": "speedControl", "size": { "width": 22, "height": 100 } },
+            "smoothSlider": { "preset": "speedSlider", "size": { "width": 54, "height": 100 } },
+            "smoothValue": { "preset": "speedValue", "size": { "width": 18, "height": 100 } }
           }
         },
         {
@@ -238,10 +260,14 @@
           "bounds": { "x": 80.25, "y": 8, "width": 4.5, "height": 84 },
           "preset": "captionButton",
           "icon": "speed",
-          "min": 10,
-          "max": 100,
-          "normal": 10,
-          "step": 1,
+          "preference": {
+            "id": "scrollSpeed",
+            "kind": "number",
+            "default": 10,
+            "min": 10,
+            "max": 100,
+            "step": 1
+          },
           "order": ["reset", "slider", "value"],
           "gap": 3,
           "popup": {
@@ -251,10 +277,9 @@
             "gap": 8,
             "headerHeight": 28,
             "rowHeight": 38,
-            "zIndex": 20,
-            "thumbSize": 14,
-            "trackSize": 3
+            "zIndex": 20
           },
+          "slider": { "thumbSize": 14, "trackSize": 3 },
           "labels": {
             "title": "Scroll speed",
             "reset": "Reset",
@@ -339,7 +364,7 @@
     {
       "id": "actionBar",
       "parentId": "window",
-      "folder": "action-bar",
+      "folder": "reader/action-bar",
       "label": "Action bar",
       "enabled": false,
       "draggable": false,
@@ -350,7 +375,7 @@
     {
       "id": "body",
       "parentId": "window",
-      "folder": "body",
+      "folder": "reader/body",
       "label": "Workspace",
       "enabled": true,
       "draggable": false,
@@ -380,7 +405,7 @@
           "renderer": "pixi",
           "maxFPS": 0,
           "tileMemoryMB": 128,
-          "momentum": { "enabled": true, "speed": 1, "tickWindowMs": 150 },
+          "momentum": { "enabled": true, "tickWindowMs": 150 },
           "scrollbar": {
             "width": 15,
             "radius": 8,
@@ -415,7 +440,7 @@
     {
       "id": "bottomBar",
       "parentId": "window",
-      "folder": "bottom-bar",
+      "folder": "reader/bottom-bar",
       "label": "Chapter navigation",
       "enabled": true,
       "draggable": false,
@@ -496,6 +521,22 @@
     {
       "from": { "area": "body", "port": "scrollSpeed" },
       "to": { "area": "windowsBar", "port": "scrollSpeed" }
+    },
+    {
+      "from": { "area": "windowsBar", "port": "setSmoothScrollDuration" },
+      "to": { "area": "body", "port": "setSmoothScrollDuration" }
+    },
+    {
+      "from": { "area": "body", "port": "smoothScrollDuration" },
+      "to": { "area": "windowsBar", "port": "smoothScrollDuration" }
+    },
+    {
+      "from": { "area": "native", "port": "readerPreferences" },
+      "to": { "area": "body", "port": "readerPreferences" }
+    },
+    {
+      "from": { "area": "body", "port": "saveReaderPreference" },
+      "to": { "area": "native", "port": "saveReaderPreference" }
     },
     { "from": { "area": "windowsBar", "port": "open" }, "to": { "area": "body", "port": "open" } },
     {

@@ -11,9 +11,12 @@ import { configuredSx } from '@logic/Appearance.ts';
 import { finite, isObject, errorText } from '@logic/VisualConfig.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
 import type { ResolvedConfig, ResolvedPart } from '@logic/ConfigValidation.ts';
+import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ChildProps, ConfigReport } from '@logic/AreaDiscovery.ts';
 import type { DiagnosticIssue } from '@logic/Diagnostics.ts';
-import type { ReaderNavigationRequest, ReaderNavigationState, Result } from '../../ShellHost.js';
+import { hasRequestPort, hasStatePort } from '@logic/ParentConnections.ts';
+import type { RequestPort, StatePort } from '@logic/ParentConnections.ts';
+import type { ReaderNavigationRequest, ReaderNavigationState, Result } from '../../../ShellHost.js';
 
 // CONFIG AND CONTRACT — one navigation block owns its buttons and chapter popup.
 export const componentId = 'reader.chapterNavigation';
@@ -49,14 +52,6 @@ export interface BottomBarNavigationInput {
   requestNavigation(request: ReaderNavigationRequest): Promise<Result>;
   report(issue: DiagnosticIssue): void;
 }
-export function navigationAvailability(state: ReaderNavigationState) {
-  const index = state.chapters.findIndex((entry) => entry.id === state.currentId);
-  return {
-    previous: !state.busy && index > 0,
-    next: !state.busy && index >= 0 && index < state.chapters.length - 1,
-    list: !state.busy && !!state.catalogId && state.chapters.length > 0,
-  };
-}
 export function validateConfig(
   config: ResolvedConfig,
   report: ConfigReport,
@@ -90,7 +85,42 @@ export function validateConfig(
   return valid;
 }
 
-// LOGIC — state is provided by Reader through parents; no sibling/native access.
+// CHILD REGISTRATION — navigation sees only its command request and current state.
+interface BottomBarNavigationPorts {
+  navigateChapter: RequestPort<ReaderNavigationRequest, Result>;
+  navigation: StatePort<ReaderNavigationState>;
+}
+const acceptsParentPorts = (value: unknown): value is BottomBarNavigationPorts =>
+  hasRequestPort(
+    value,
+    'navigateChapter',
+    'ui.reader.navigation.input',
+    'ui.reader.navigation.output',
+  ) && hasStatePort(value, 'navigation', 'ui.reader.navigation.state');
+export const child = defineChild(
+  'BottomBar',
+  BottomBarChapterNavigation,
+  validateConfig,
+  { componentId, configKeys, partKeys },
+  acceptsParentPorts,
+  (ports, report) => ({
+    state: ports.navigation.getSnapshot(),
+    requestNavigation: ports.navigateChapter.request,
+    report,
+  }),
+);
+
+// LOGIC AND CALCULATIONS — derive control availability from parent-provided reader state.
+export function navigationAvailability(state: ReaderNavigationState) {
+  const index = state.chapters.findIndex((entry) => entry.id === state.currentId);
+  return {
+    previous: !state.busy && index > 0,
+    next: !state.busy && index >= 0 && index < state.chapters.length - 1,
+    list: !state.busy && !!state.catalogId && state.chapters.length > 0,
+  };
+}
+
+// STATE AND COORDINATION — popup and pending state remain local; Reader owns navigation.
 export default function BottomBarChapterNavigation({
   config,
   input,
@@ -128,6 +158,8 @@ export default function BottomBarChapterNavigation({
       setPending(false);
     }
   };
+
+  // UI AND LOCAL EVENTS — popup placement, open/close and pointer dragging.
   const clamp = () => {
     const width = Math.min(config.popup.width, innerWidth),
       height = Math.min(config.popup.height, innerHeight);
@@ -180,6 +212,8 @@ export default function BottomBarChapterNavigation({
       event.currentTarget.releasePointerCapture(event.pointerId);
     drag.current = null;
   };
+
+  // LIFECYCLE AND CLEANUP — bind popup-only keyboard/resize behavior and release drag state.
   useEffect(() => {
     if (!open) return undefined;
     clamp();
@@ -208,7 +242,7 @@ export default function BottomBarChapterNavigation({
     selected?.scrollIntoView({ block: 'nearest' });
   }, [input.state.currentId, open]);
 
-  // UI — a hover-strip row and modeless popup; all visuals and sizes are configured.
+  // UI AND LOCAL EVENTS — hover-strip row and modeless popup use configured visuals/sizes.
   return (
     <ClickAwayListener
       onClickAway={() => {

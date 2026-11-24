@@ -14,35 +14,50 @@ screen/
 ├── index.html
 ├── styles.css                        Reset, fill and drag mechanics
 │
-├── windows-area/
-│   ├── WindowsArea.tsx                Parent: child layout and forwarding
-│   ├── WindowsAreaBtnSettingScreen.tsx Own far-left gear and persistent settings popup
-│   ├── WindowsAreaBtnLoad.tsx         Own Load logic, validation and UI behavior
-│   ├── WindowsAreaBtnScrollSpeed.tsx  Own draggable speed panel and live controls
-│   ├── WindowsAreaBtnClose.tsx        Own Close logic, validation and UI behavior
-│   ├── WindowsAreaBtnDefaultSize.tsx  Own return-to-default logic and UI behavior
-│   └── WindowsAreaTitle.tsx           Retained disabled title child
+├── shared/                             Reusable UI and non-feature mechanics
 │
-├── body/
-│   ├── Body.tsx                       Parent: mount/connect its reader
-│   └── reader/
-│       ├── BodyReader.tsx             Own reader state, loading, zoom, UI and SCROLLBAR
-│       ├── BodyReaderPixi.ts           Canvas/input/worker connection
-│       ├── BodyReaderPixiWorker.ts     GPU tile residency, drawing and momentum
-│       ├── BodyReaderPixiWorkerContract.d.ts  Local worker messages
-│       └── BodyReaderPixiWorkerPolicy.ts    Pure momentum calculations
+├── reader/                             Complete standalone Reader application
+│   ├── windows-area/
+│   │   ├── WindowsArea.tsx             Dumb parent: placement and forwarding
+│   │   ├── WindowsAreaContract.ts      Parent relay contracts and port creation
+│   │   ├── WindowsAreaBtnSettingScreen.tsx Own gear/settings feature + registration
+│   │   ├── WindowsAreaBtnLoad.tsx      Own Load feature + registration
+│   │   ├── WindowsAreaBtnScrollSpeed.tsx Own speed feature + registration
+│   │   ├── WindowsAreaBtnClose.tsx     Own Close feature + registration
+│   │   ├── WindowsAreaBtnDefaultSize.tsx Own default-size feature + registration
+│   │   └── WindowsAreaTitle.tsx        Retained disabled title child
+│   ├── body/
+│   │   ├── Body.tsx                    Dumb parent: placement and forwarding
+│   │   ├── BodyContract.ts             Reader relay contracts and port creation
+│   │   └── reader/
+│   │       ├── BodyReader.tsx          Reader state/loading/zoom/UI + registration
+│   │       ├── BodyReaderPixi.ts       Canvas/input/worker connection
+│   │       ├── BodyReaderPixiWorker.ts GPU tile residency, drawing and momentum
+│   │       ├── BodyReaderPixiWorkerContract.d.ts Local worker messages
+│   │       └── BodyReaderPixiWorkerPolicy.ts Pure momentum calculations
+│   ├── bottom-bar/
+│   │   ├── BottomBar.tsx               Dumb parent: placement and forwarding
+│   │   ├── BottomBarContract.ts        Navigation/status relay contracts
+│   │   ├── BottomBarChapterNavigation.tsx Previous/List/Next + registration
+│   │   └── BottomBarStatus.tsx         Retained disabled status child
+│   └── action-bar/
+│       └── ActionBar.tsx               Retained disabled empty parent
 │
-├── action-bar/
-│   └── ActionBar.tsx                  Disabled empty area parent
-└── bottom-bar/
-    ├── BottomBar.tsx                  Hover navigation parent and forwarding
-    ├── BottomBarChapterNavigation.tsx Previous/List/Next and draggable chapter popup
-    └── BottomBarStatus.tsx            Retained disabled status child
+├── library/                            Reserved standalone Library owner
+└── downloader/                         Reserved standalone Downloader owner
 ```
 
 Children inherit their parent's filename prefix, not its implementation. A child
 owns its own logic, UI and local state. Parents place children, pass narrow inputs,
 forward events and dispose connections; they do not own child algorithms.
+
+Reader, Library and Downloader are sibling application owners. Reader is the only
+implemented application in this repository today; the Library/Downloader folders
+reserve their independent UI/native boundaries for another agent. Their connection
+direction is `Downloader --completed filesystem files--> Library --open CBZ--> Reader`,
+with Library able to use the configured Windows CBZ opener instead. Shared mechanics
+must not become a hidden application controller, and sibling apps never import one
+another's implementations.
 
 Siblings never import, call or inspect one another. Open follows:
 
@@ -86,18 +101,21 @@ their release routes remain available through child resource cleanup.
 1. Add its folder with a named parent and prefixed children, for example
    `screen/tools-area/ToolsArea.tsx` and `ToolsAreaFirstControl.tsx`.
 2. The parent exports stable `areaId`, `parentName`, default component and typed
-   `bindArea` binding. It uses `bindChild` to connect its own children and validators.
-3. Add its `areas` entry and children to `screen/config.json`. Declare any needed
+   `bindArea` binding. It does not import or list its children.
+3. Each child exports a `defineChild` registration naming its parent, identity,
+   validator and narrow required ports. Generic discovery derives its actual path.
+4. Add its `areas` entry and children to `screen/config.json`. Declare any needed
    connection in the parent's `connections` data.
-4. Run `npm run check:code`, build and a focused check of the new area.
+5. Run `npm run check:code`, build and a focused check of the new area.
 
 No edit to `main.tsx`, `Screen.tsx` or generic discovery is needed merely to register
 an area. Discovery uses a generic build-time scope and admits only declared roots.
 Leaves/helpers are not global area registrations. IDs are explicit, not inferred
 from filenames. A new native capability still needs its real native implementation.
 
-To add a child, add its prefixed file, bind it in its owning parent and configure
-it. Existing siblings stay untouched. Types and validators stay with their owner.
+To add a compatible child, add its prefixed self-registering file and configure it.
+The parent, central assembler and existing siblings stay untouched. Types and
+validators stay with their owner.
 
 ## Configuration
 
@@ -119,6 +137,7 @@ rebuild after changing or adding modules. Native settings remain in
 `electron/config.json`, not duplicated in screen config.
 
 ## Current window and reader behavior
+
 ### Load button folder
 
 The `readerOpen` child in `screen/config.json` supports:
@@ -161,16 +180,27 @@ the strip hides its children without shifting the reader. Alt+F4 closes the app.
 
 The far-left gear opens a draggable, modeless **Setting Screen** with a blank header,
 right-side X and section cards. Each card has a label with a collapse chevron and a
-body; collapsed cards stay mounted so their content keeps its state. The body will be
-defined later.
+body; collapsed cards stay mounted so their content keeps its state. Card chrome is a
+shared component. Smooth scroll is currently the only visible section; the empty
+Display placeholder was removed. A new section supplies only its configured identity
+and its own body controls.
 Leaving the top hover strip, clicking outside or pressing Escape does not close it.
 X hides the screen without unmounting its header/body; reopening keeps the dragged
-position and future body state for this app session. No state is stored across
-restarts and no second native window is created.
+position and body state. No second native window is created.
 
 The settingScreen child in `screen/config.json` owns placement, popup size, header
-order, labels and visuals. `windows-area/WindowsAreaBtnSettingScreen.tsx` owns its
+order, labels and visuals. `reader/windows-area/WindowsAreaBtnSettingScreen.tsx` owns its
 open/close, focus and drag lifecycle. Reader geometry and existing controls remain.
+
+Smooth scroll has Reset, a 100–2000 ms slider and a live millisecond value. Its
+configured 250 ms default preserves the previous wheel travel while controlling how
+quickly that distance is delivered. It is separate from the 150 ms nearby-tick join
+window and from the 1×–10× Scroll speed multiplier.
+
+Smooth scroll and Scroll speed both render
+`screen/shared/components/ConfiguredValueSlider.tsx`. That shared component owns MUI
+Slider mechanics, accessibility and configured thumb/track geometry; each feature
+still owns its value, unit, Reset, persistence and Reader operation.
 
 ### Bottom chapter navigation
 
@@ -185,7 +215,8 @@ Previous/Next disable at the catalog boundaries or while navigating. Loaded page
 are reused; unloaded chapters use the existing authorized loader, with no new
 picker. Jumps stop momentum but retain zoom and scroll speed. The controls, row
 order, popup geometry and visuals belong to the chapterNavigation child in
-`screen/config.json`; logic/UI live in `bottom-bar/BottomBarChapterNavigation.tsx`.
+`screen/config.json`; logic/UI live in
+`reader/bottom-bar/BottomBarChapterNavigation.tsx`.
 
 ### Scroll Speed button
 
@@ -194,22 +225,36 @@ its title to move it; click outside or press Escape to close. Closing keeps the
 selected speed. Reset, slider and numeric input share one value and apply immediately,
 including to momentum already running. No page reload or worker restart occurs.
 
-The readerScrollSpeed child in `screen/config.json` owns its range and visuals:
+The readerScrollSpeed child in `screen/config.json` owns its preference and visuals:
 
 ```json
-"min": 10,
-"max": 100,
-"normal": 10,
-"step": 1
+"preference": {
+  "id": "scrollSpeed",
+  "kind": "number",
+  "default": 10,
+  "min": 10,
+  "max": 100,
+  "step": 1
+}
 ```
 
 Speed is **value / 10**: 10=1×, 50=5×, 100=10×. The default step gives 91 values
 at 0.1× increments. Numeric drafts can be typed naturally; applied speed is always
-clamped/snapped, and Enter/blur commits the displayed value. Reset uses normal.
-Changes last for this app session, not a new persisted preference. Popup sizing,
-part order, styling and labels remain in that child's JSON.
+clamped/snapped, and Enter/blur commits the displayed value. Reset uses the configured
+default.
 
-`body/reader/BodyReader.tsx` owns chapters in named sections. The first configured
+Scroll speed and Smooth scroll persist across restarts in:
+
+```text
+%APPDATA%\Yuzread\reader-preferences.json
+```
+
+That file contains only user overrides. Startup validates them against the numeric
+schemas in `screen/config.json` before creating the Reader worker. Reset removes an
+override, allowing a later configured default to take effect. Popup sizing, part
+order, styling and labels remain in their owning JSON entries.
+
+`reader/body/reader/BodyReader.tsx` owns chapters in named sections. The first configured
 3–5 pages decode before display; remaining pages prepare sequentially in the native
 worker. Fixed page boxes and opening-time DPI/size keep images unchanged on resize.
 Narrow pages stay naturally capped/centered in the widest-page chapter column;
@@ -265,7 +310,7 @@ loaded page**, not a first-page preview. The current reader configuration is:
 
 ```json
 "renderer": "pixi",
-"momentum": { "enabled": true, "speed": 1, "tickWindowMs": 150 },
+"momentum": { "enabled": true, "tickWindowMs": 150 },
 "maxFPS": 0,
 "tileMemoryMB": 128
 ```

@@ -1,9 +1,12 @@
 import ActionButton from '@ui/ActionButton.tsx';
 import { errorText, isObject } from '@logic/VisualConfig.ts';
+import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ChildProps, ConfigReport } from '@logic/AreaDiscovery.ts';
+import { hasRequestPort, hasStatePort } from '@logic/ParentConnections.ts';
+import type { RequestPort, StatePort } from '@logic/ParentConnections.ts';
 import type { ResolvedConfig } from '@logic/ConfigValidation.ts';
-import type { ActionSource, DiagnosticIssue } from '@logic/Diagnostics.ts';
-import type { Failure, ReaderPickerSettings } from '../../ShellHost.js';
+import type { DiagnosticIssue } from '@logic/Diagnostics.ts';
+import type { OpenIntent, OpenOutcome, ReaderInfo } from './WindowsAreaContract.ts';
 
 // CONFIG AND CONTRACT — leaf owns its label/busy behavior and Open intent.
 export const componentId = 'reader.open';
@@ -14,16 +17,6 @@ export interface WindowsAreaLoadConfig extends ResolvedConfig {
   folderPath?: string;
   rememberFolder?: boolean;
 }
-export type OpenIntent = ActionSource & { picker?: ReaderPickerSettings };
-export interface ReaderInfo {
-  readonly phase: '' | 'scanning' | 'preparing';
-  readonly total: number;
-}
-export type OpenOutcome =
-  | { ok: true; canceled: true }
-  | { ok: true; chapter: { id: string; pages: number } }
-  | Failure
-  | undefined;
 export interface WindowsAreaLoadInput {
   reader: ReaderInfo;
   requestOpen(source: OpenIntent): Promise<OpenOutcome>;
@@ -63,6 +56,28 @@ export function validateConfig(
     reject('icons', 'open/busy icons', config.icons);
   return valid;
 }
+
+// CHILD REGISTRATION — declare only the two WindowsArea capabilities Load consumes.
+interface WindowsAreaLoadPorts {
+  open: RequestPort<OpenIntent, OpenOutcome>;
+  readerState: StatePort<ReaderInfo>;
+}
+const acceptsParentPorts = (value: unknown): value is WindowsAreaLoadPorts =>
+  hasRequestPort(value, 'open', 'ui.open.input.v2', 'ui.open.output') &&
+  hasStatePort(value, 'readerState', 'ui.reader.state');
+export const child = defineChild(
+  'WindowsArea',
+  WindowsAreaBtnLoad,
+  validateConfig,
+  { componentId, configKeys },
+  acceptsParentPorts,
+  (ports, report) => ({
+    reader: ports.readerState.getSnapshot(),
+    requestOpen: ports.open.request,
+    report,
+  }),
+);
+
 // UI AND LOCAL EVENTS — no sibling/bridge/session reference.
 export default function WindowsAreaBtnLoad({
   config,

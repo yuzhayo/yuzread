@@ -46,25 +46,33 @@ export const createWheelGesture = (): WheelGesture => ({
   rate: 0,
   lastTick: null,
 });
-const creditLimit = (value: number, speed: number) =>
-  clampMomentum(value / FRICTION, speed) * FRICTION;
+const creditLimit = (value: number, speed: number, duration: number) =>
+  clampMomentum(value / duration, speed) * duration;
 export function appendWheelTick(
   state: WheelGesture,
   distance: number,
   time: number,
   speed = 1,
-  windowMs = 150,
+  windowMs: number,
+  smoothDurationMs: number,
 ) {
   if (!Number.isFinite(distance) || !distance || !Number.isFinite(time)) return state;
+  const duration = Math.max(0.1, Math.min(2, smoothDurationMs / 1000));
   const direction = Math.sign(distance),
     sameDirection = direction === Math.sign(state.rate);
   const gap = state.lastTick === null ? Infinity : Math.max(0, time - state.lastTick);
   const joined = sameDirection && gap <= windowMs;
   const sample = clampMomentum((distance * GAIN) / Math.max(0.016, gap / 1000), speed);
-  const rate = joined ? state.rate + (sample - state.rate) * 0.5 : momentumImpulse(distance, speed);
+  const rate = joined
+    ? state.rate + (sample - state.rate) * 0.5
+    : clampMomentum((distance * GAIN) / duration, speed);
   return {
     velocity: clampMomentum(state.velocity, speed),
-    remaining: creditLimit((sameDirection ? state.remaining : 0) + distance * GAIN, speed),
+    remaining: creditLimit(
+      (sameDirection ? state.remaining : 0) + distance * GAIN,
+      speed,
+      duration,
+    ),
     rate: clampMomentum(rate, speed),
     lastTick: Math.max(time, state.lastTick ?? time),
   };
@@ -73,11 +81,29 @@ export function scaleWheelGesture(
   state: WheelGesture,
   factor: number,
   speed: number,
+  smoothDurationMs: number,
 ): WheelGesture {
+  const duration = Math.max(0.1, Math.min(2, smoothDurationMs / 1000));
   return {
     ...state,
     velocity: clampMomentum(state.velocity * factor, speed),
-    remaining: creditLimit(state.remaining * factor, speed),
+    remaining: creditLimit(state.remaining * factor, speed, duration),
+    rate: clampMomentum(state.rate * factor, speed),
+  };
+}
+export function scaleWheelDuration(
+  state: WheelGesture,
+  previousMs: number,
+  nextMs: number,
+  speed = 1,
+): WheelGesture {
+  const previous = Math.max(0.1, Math.min(2, previousMs / 1000)),
+    next = Math.max(0.1, Math.min(2, nextMs / 1000)),
+    factor = previous / next;
+  return {
+    ...state,
+    velocity: clampMomentum(state.velocity * factor, speed),
+    remaining: creditLimit(state.remaining, speed, next),
     rate: clampMomentum(state.rate * factor, speed),
   };
 }
@@ -86,12 +112,14 @@ export function advanceWheelGesture(
   elapsed: number,
   now: number,
   speed = 1,
-  windowMs = 150,
+  windowMs: number,
+  smoothDurationMs: number,
 ) {
   speed = validSpeed(speed);
+  const duration = Math.max(0.1, Math.min(2, smoothDurationMs / 1000));
   const seconds = Number.isFinite(elapsed) ? Math.max(0, Math.min(0.05, elapsed)) : 0;
   let velocity = clampMomentum(state.velocity, speed),
-    remaining = creditLimit(state.remaining, speed),
+    remaining = creditLimit(state.remaining, speed, duration),
     distance = 0;
   const steps = Math.max(1, Math.ceil(seconds / 0.004)),
     step = seconds / steps;
@@ -100,8 +128,8 @@ export function advanceWheelGesture(
     const joined = state.lastTick !== null && at - state.lastTick <= windowMs;
     const direction = Math.sign(remaining);
     const target = joined
-      ? direction * Math.min(Math.abs(state.rate), Math.abs(remaining) / 0.2)
-      : remaining / FRICTION;
+      ? direction * Math.min(Math.abs(state.rate), Math.abs(remaining) / (duration * 0.8))
+      : remaining / duration;
     // Opposing input brakes promptly; same-direction changes blend over 40 ms.
     const response = velocity * target < 0 ? 0.02 : 0.04;
     const decay = Math.exp(-step / response);

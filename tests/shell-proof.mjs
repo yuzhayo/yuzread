@@ -45,13 +45,14 @@ try {
   const before = await page.locator('#body').boundingBox();
   assert.deepEqual(await page.evaluate(() => window.shellDev.records()), []);
   await reveal();
-  assert.equal(await page.locator('[data-instance="windowControls"]').getByRole('button').count(), 2);
+  const windowControls = page.locator('[data-instance="windowControls"]');
+  assert.equal(await windowControls.getByRole('button').count(), 2);
   assert.equal(await page.locator('[data-instance="appTitle"]').count(), 0);
   assert.equal(await page.getByRole('button', { name: 'Minimize window' }).count(), 0);
   assert.equal(await page.locator('[data-instance="windowControls"]').count(), 1);
   assert.equal(await page.locator('[data-instance="minimize"], [data-instance="maximize"], [data-instance="close"]').count(), 0);
   for (const name of ['maximize', 'close']) {
-    const relative = await page.locator(`[data-part="${name}"]`).evaluate((element) => {
+    const relative = await windowControls.locator(`[data-part="${name}"]`).evaluate((element) => {
       const section = document.querySelector('#windowsBar');
       const bar = section.getBoundingClientRect();
       const bounds = element.getBoundingClientRect();
@@ -70,10 +71,10 @@ try {
   await reveal();
   checks.push('native hover reveals/hides the group without moving the body');
   await reconfigure('reverse');
-  await page.waitForFunction(() => document.querySelector('[data-part]')?.dataset.part === 'close');
+  await page.waitForFunction(() => document.querySelector('[data-instance="windowControls"] [data-part]')?.dataset.part === 'close');
   await reconfigure('preset');
-  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-part="maximize"] button')).backgroundColor === 'rgb(35, 69, 103)');
-  assert.equal(await page.locator('[data-part="close"] button').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(35, 69, 103)');
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('[data-instance="windowControls"] [data-part="maximize"] button')).backgroundColor === 'rgb(35, 69, 103)');
+  assert.equal(await windowControls.locator('[data-part="close"] button').evaluate((element) => getComputedStyle(element).backgroundColor), 'rgb(35, 69, 103)');
   checks.push('JSON order and shared visual preset change internal parts');
   for (const operation of ['invalid', 'overflow', 'action', 'disabled']) {
     await reconfigure(operation);

@@ -1,4 +1,4 @@
-import type { ReaderPreparedPage, ReaderWorkPriority, Result } from '../../../ShellHost.js';
+import type { ReaderPreparedPage, ReaderWorkPriority, Result } from '../../../../ShellHost.js';
 import type {
   PixiInput,
   PixiOutput,
@@ -19,6 +19,7 @@ export interface ReaderPixiOptions {
   maxFPS: number;
   tileMemoryMB: number;
   tickWindowMs: number;
+  smoothDurationMs: number;
   maxDecodedMB: number;
   getDocumentId(): string;
   getPages(): ReaderRenderPage[];
@@ -35,6 +36,8 @@ export class ReaderSurfaceError extends Error {
     super(message);
   }
 }
+
+// LOGIC AND CALCULATIONS — validate worker output before it can affect reader state.
 const record = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 const integer = (v: unknown): v is number =>
@@ -122,6 +125,7 @@ function validOutput(v: unknown): v is PixiOutput {
   }
 }
 
+// STATE AND COORDINATION — one bridge owns canvas, worker requests and camera projection.
 export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOptions) {
   const parent = view.parentElement;
   if (!parent) throw new Error('Reader is not mounted');
@@ -141,8 +145,10 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     revision = 0,
     control = 0,
     requestId = 0;
-  let speed = options.speed;
+  let speed = options.speed,
+    smoothDurationMs = options.smoothDurationMs;
   view.dataset.scrollSpeed = String(speed);
+  view.dataset.smoothScrollDuration = String(smoothDurationMs);
   let baselineTop = view.scrollTop,
     documentId = '',
     layoutFrame: number | null = null;
@@ -479,6 +485,8 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       post(value(id));
     });
   }
+
+  // LIFECYCLE AND CLEANUP — settle or cancel every owned listener, request and resource.
   function finish() {
     clearTimer();
     worker.terminate();
@@ -521,6 +529,8 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
   const closeOnHide = () => {
     void close();
   };
+
+  // UI AND LOCAL EVENTS — translate browser input/lifecycle into validated worker commands.
   worker.addEventListener('message', receive);
   worker.addEventListener('error', workerError);
   worker.addEventListener('messageerror', messageError);
@@ -539,6 +549,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       maxFPS: options.maxFPS,
       tileMemoryMB: options.tileMemoryMB,
       tickWindowMs: options.tickWindowMs,
+      smoothDurationMs,
     },
     offscreen ? [offscreen] : [],
   );
@@ -560,6 +571,8 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
   document.addEventListener('visibilitychange', visibility);
   reduced.addEventListener('change', stop);
   timer = window.setTimeout(() => fail(new Error('GPU worker initialization timed out')), 15000);
+
+  // STATE AND COORDINATION — expose only reader-owned commands, never the raw worker.
   return {
     setSpeed(next: number) {
       if (closed || !Number.isFinite(next) || next < 0.1 || next > 10 || next === speed) return;
@@ -570,6 +583,25 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
         kind: 'speed',
         control: ++control,
         speed,
+        maxY: Math.max(0, view.scrollHeight - view.clientHeight),
+      });
+    },
+    setSmoothDuration(next: number) {
+      if (
+        closed ||
+        !Number.isInteger(next) ||
+        next < 100 ||
+        next > 2000 ||
+        next === smoothDurationMs
+      )
+        return;
+      smoothDurationMs = next;
+      view.dataset.smoothScrollDuration = String(next);
+      post({
+        version: 1,
+        kind: 'smooth-duration',
+        control: ++control,
+        durationMs: next,
         maxY: Math.max(0, view.scrollHeight - view.clientHeight),
       });
     },

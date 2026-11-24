@@ -15,31 +15,29 @@ import type {
   ReaderChapterResult,
   ReaderCatalog,
   Result,
-  Failure,
   ReaderWorkPriority,
   ReaderMetricEvent,
   ReaderMetricValue,
-  ReaderPickerSettings,
   ReaderNavigationRequest,
   ReaderNavigationState,
   ReaderDropRequest,
-} from '../../../ShellHost.js';
+  ReaderNumberSettingChange,
+  ReaderPreferenceSnapshot,
+  ReaderPreferenceUpdate,
+} from '../../../../ShellHost.js';
+import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ConfigReport, ChildProps } from '@logic/AreaDiscovery.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
+import { hasRequestPort, hasStatePort } from '@logic/ParentConnections.ts';
 import { attachReaderPixi, ReaderSurfaceError } from './BodyReaderPixi.ts';
 import type { ResolvedConfig, ResolvedPart } from '@logic/ConfigValidation.ts';
-import type { ActionSource } from '@logic/Diagnostics.ts';
-export type ReaderPhase = '' | 'scanning' | 'preparing';
-export interface ReaderState {
-  readonly phase: ReaderPhase;
-  readonly total: number;
-}
-export type ScreenOpenResult =
-  | { ok: true; canceled: true }
-  | { ok: true; chapter: { id: string; pages: number } }
-  | Failure
-  | undefined;
-export type ReaderOpenIntent = ActionSource & { picker?: ReaderPickerSettings };
+import type {
+  BodyPorts,
+  ReaderOpenIntent,
+  ReaderPhase,
+  ReaderState,
+  ScreenOpenResult,
+} from '../BodyContract.ts';
 export interface BodyReaderInput {
   openArchive(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
   openDroppedArchive(request: ReaderDropRequest): Promise<ReaderOpenResult>;
@@ -48,13 +46,21 @@ export interface BodyReaderInput {
   releaseChapter(id: string): Promise<Result>;
   registerOpenRequest(handler: (source: ReaderOpenIntent) => Promise<ScreenOpenResult>): () => void;
   publishState(state: ReaderState): void;
-  registerScrollSpeed(handler: (speed: number) => Result): () => void;
+  registerScrollSpeed(
+    handler: (change: ReaderNumberSettingChange) => Result | Promise<Result>,
+  ): () => void;
   publishScrollSpeed(speed: number): void;
+  registerSmoothScrollDuration(
+    handler: (change: ReaderNumberSettingChange) => Result | Promise<Result>,
+  ): () => void;
+  publishSmoothScrollDuration(durationMs: number): void;
+  preferences: ReaderPreferenceSnapshot | null;
+  persistPreference(update: ReaderPreferenceUpdate): Promise<Result>;
   registerNavigation(handler: (request: ReaderNavigationRequest) => Promise<Result>): () => void;
   publishNavigation(state: ReaderNavigationState): void;
   submitReaderMetrics(events: ReaderMetricEvent[]): Promise<Result>;
   reserveRender(
-    request: import('../../../ShellHost.js').ReaderRenderReserveRequest,
+    request: import('../../../../ShellHost.js').ReaderRenderReserveRequest,
   ): Promise<Result>;
 }
 
@@ -86,7 +92,7 @@ export interface ReaderConfig extends ResolvedConfig {
   renderer?: 'dom' | 'pixi';
   maxFPS?: number;
   tileMemoryMB?: number;
-  momentum?: { enabled: boolean; speed: number; tickWindowMs?: number };
+  momentum?: { enabled: boolean; tickWindowMs?: number };
   scrollbar: ScrollbarSettings;
   labels: Record<(typeof labelKeys)[number], string>;
   parts: Record<(typeof partKeys)[number], ResolvedPart>;
@@ -302,19 +308,12 @@ export function validateConfig(
     config.momentum !== undefined &&
     (!isObject(config.momentum) ||
       typeof config.momentum.enabled !== 'boolean' ||
-      !finite(config.momentum.speed, 0.1, 10) ||
       (config.momentum.tickWindowMs !== undefined &&
         (!Number.isInteger(config.momentum.tickWindowMs) ||
           !finite(config.momentum.tickWindowMs, 50, 300))) ||
-      Object.keys(config.momentum).some(
-        (key) => !['enabled', 'speed', 'tickWindowMs'].includes(key),
-      ))
+      Object.keys(config.momentum).some((key) => !['enabled', 'tickWindowMs'].includes(key)))
   )
-    reject(
-      'momentum',
-      'enabled boolean, speed 0.1–10, optional tickWindowMs 50–300',
-      config.momentum,
-    );
+    reject('momentum', 'enabled boolean and optional tickWindowMs 50–300', config.momentum);
   if (
     !isNamedRecord(
       config.labels,
@@ -327,7 +326,84 @@ export function validateConfig(
   return valid;
 }
 
-// LOGIC — base geometry is fixed per opening; explicit zoom is a separate operation.
+// CHILD REGISTRATION — BodyReader consumes every declared Body capability, and no host global.
+const acceptsParentPorts = (value: unknown): value is BodyPorts =>
+  hasRequestPort(
+    value,
+    'navigateChapter',
+    'ui.reader.navigation.input',
+    'ui.reader.navigation.output',
+  ) &&
+  hasStatePort(value, 'navigation', 'ui.reader.navigation.state') &&
+  hasRequestPort(value, 'setScrollSpeed', 'ui.reader.speed.input', 'ui.reader.speed.output') &&
+  hasStatePort(value, 'scrollSpeed', 'ui.reader.speed.state') &&
+  hasRequestPort(
+    value,
+    'setSmoothScrollDuration',
+    'ui.reader.smooth-duration.input',
+    'ui.reader.smooth-duration.output',
+  ) &&
+  hasStatePort(value, 'smoothScrollDuration', 'ui.reader.smooth-duration.state') &&
+  hasStatePort(value, 'readerPreferences', 'native.reader.preferences.state') &&
+  hasRequestPort(
+    value,
+    'saveReaderPreference',
+    'native.reader.preference.input',
+    'native.result',
+  ) &&
+  hasRequestPort(value, 'open', 'ui.open.input.v2', 'ui.open.output') &&
+  hasStatePort(value, 'readerState', 'ui.reader.state') &&
+  hasRequestPort(
+    value,
+    'archiveOpen',
+    'native.reader.open.input.v3',
+    'native.reader.open.output.v4',
+  ) &&
+  hasRequestPort(value, 'dropOpen', 'native.reader.drop.input', 'native.reader.open.output.v4') &&
+  hasRequestPort(
+    value,
+    'chapterOpen',
+    'native.reader.chapter.input.v2',
+    'native.reader.chapter.output.v2',
+  ) &&
+  hasRequestPort(
+    value,
+    'prepare',
+    'native.reader.prepare.input.v3',
+    'native.reader.prepare.output.v3',
+  ) &&
+  hasRequestPort(value, 'release', 'native.reader.release.input', 'native.result') &&
+  hasRequestPort(value, 'readerMetrics', 'native.reader.metrics.input', 'native.result') &&
+  hasRequestPort(value, 'renderReserve', 'native.reader.render-reserve.input', 'native.result');
+export const child = defineChild(
+  'Body',
+  BodyReader,
+  validateConfig,
+  { componentId, configKeys, partKeys },
+  acceptsParentPorts,
+  (ports) => ({
+    openArchive: ports.archiveOpen.request,
+    openDroppedArchive: ports.dropOpen.request,
+    openChapter: ports.chapterOpen.request,
+    preparePage: ports.prepare.request,
+    releaseChapter: ports.release.request,
+    registerOpenRequest: ports.open.register,
+    publishState: ports.readerState.publish,
+    submitReaderMetrics: ports.readerMetrics.request,
+    reserveRender: ports.renderReserve.request,
+    registerScrollSpeed: ports.setScrollSpeed.register,
+    publishScrollSpeed: ports.scrollSpeed.publish,
+    registerSmoothScrollDuration: ports.setSmoothScrollDuration.register,
+    publishSmoothScrollDuration: ports.smoothScrollDuration.publish,
+    preferences: ports.readerPreferences.getSnapshot(),
+    persistPreference: ports.saveReaderPreference.request,
+    registerNavigation: ports.navigateChapter.register,
+    publishNavigation: ports.navigation.publish,
+  }),
+);
+
+// LOGIC AND CALCULATIONS
+// GEOMETRY — base geometry is fixed per opening; explicit zoom is separate.
 const displayBox = (page: PageMetadata, maximumPixels: number, ratio: number) => {
   const widthPixels = Math.min(page.width, Math.max(1, Math.floor(maximumPixels)));
   const heightPixels = Math.max(1, Math.round((page.height * widthPixels) / page.width));
@@ -340,6 +416,7 @@ export const normalizeZoom = (value: number, min: number, max: number, step: num
   return Math.min(max, Math.max(min, Number(snapped.toFixed(4))));
 };
 
+// STATE AND COORDINATION
 // DIAGNOSTICS — no monitor/listeners/timers/frame callbacks exist when disabled.
 export function createScrollContinuity() {
   let x = 0,
@@ -596,6 +673,7 @@ function useReaderMetrics(
   return metrics;
 }
 
+// UI AND LOCAL EVENTS
 // SCROLLBAR — a floating control for the native scroller; never a layout gutter.
 interface ScrollbarSettings {
   width: number;
@@ -824,7 +902,8 @@ function useReaderScrollbar(
 }
 // END SCROLLBAR
 
-// LOGIC — page elements/resources are owned here, not recreated on scroll or hover.
+// STATE AND COORDINATION
+// READER SESSION — page resources and chapter state are owned here, not recreated on scroll.
 export default function BodyReader({ config, input }: ChildProps<ReaderConfig, BodyReaderInput>) {
   const viewport = useRef<HTMLDivElement>(null),
     strip = useRef<HTMLDivElement>(null);
@@ -853,7 +932,18 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   const zoomValue = useRef(1),
     cancelZoom = useRef<(() => void) | null>(null);
   const surface = useRef<ReturnType<typeof attachReaderPixi> | null>(null);
-  const scrollSpeed = useRef(config.momentum?.speed ?? 1);
+  const configuredSpeed = input.preferences?.values.scrollSpeed,
+    configuredSmoothDuration = input.preferences?.values.smoothScrollDurationMs;
+  const scrollSpeedSetting = useRef<number | null>(null),
+    smoothDuration = useRef<number | null>(null);
+  if (scrollSpeedSetting.current === null && finite(configuredSpeed, 1, 100))
+    scrollSpeedSetting.current = configuredSpeed;
+  if (
+    smoothDuration.current === null &&
+    Number.isInteger(configuredSmoothDuration) &&
+    finite(configuredSmoothDuration, 100, 2000)
+  )
+    smoothDuration.current = configuredSmoothDuration;
   const host = useMemo(
     () => ({
       open: input.openArchive,
@@ -1480,7 +1570,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       )[0];
   };
 
-  // PREPARATION — one reader pump owns all current/demand/next pages and browser
+  // LOGIC AND CALCULATIONS — PREPARATION
+  // One reader pump owns all current/demand/next pages and browser
   // image acceptance. Native workers share a second, global single-operation queue.
   const pumpReading = async (session: ReaderSession): Promise<void> => {
     if (session.pumping || !session.alive || session.paused || reading.current !== session) return;
@@ -2004,7 +2095,8 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     }
   };
 
-  // ZOOM — only explicit input schedules a frame; ordinary scrolling stays native.
+  // UI AND LOCAL EVENTS — ZOOM
+  // Only explicit input schedules a frame; ordinary scrolling stays native.
   useEffect(() => {
     const view = viewport.current,
       content = strip.current;
@@ -2083,7 +2175,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     };
   }, [config.minZoom, config.maxZoom, config.zoomStep]);
 
-  // LIFECYCLE — passive scroll signals chapter crossings, never page/React frame work.
+  // LIFECYCLE AND CLEANUP — passive scroll signals crossings, never page/React frame work.
   useEffect(() => {
     const view = viewport.current;
     if (!view) return undefined;
@@ -2104,7 +2196,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     return () => view.removeEventListener('scroll', scroll);
   }, []);
 
-  // LIFECYCLE — retire the catalog and every resident/in-flight generation on close.
+  // LIFECYCLE AND CLEANUP — retire catalog and resident/in-flight generations on close.
   useEffect(() => {
     alive.current = true;
     const cleanup = () => {
@@ -2122,7 +2214,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     };
   }, []);
 
-  // LOGIC — the reader owns the open capability; the Windows area only requests it.
+  // UI AND LOCAL EVENTS — drag/drop and public reader requests reuse the same open operation.
   useEffect(() => {
     const view = viewport.current;
     if (!view) return undefined;
@@ -2170,18 +2262,22 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     return input.registerNavigation(navigateChapter);
   }, [input.registerNavigation, input.publishNavigation]);
 
-  // RENDER SURFACE — one worker for the reader lifetime, not one per page/chapter.
+  // LIFECYCLE AND CLEANUP — RENDER SURFACE
+  // One worker lives for the reader lifetime, not one per page/chapter.
   useEffect(() => {
     const view = viewport.current;
-    if (!view) return undefined;
+    const speedSetting = scrollSpeedSetting.current,
+      durationMs = smoothDuration.current;
+    if (!view || speedSetting === null || durationMs === null) return undefined;
     try {
       const renderer = attachReaderPixi(view, {
         gpu: config.renderer !== 'dom',
         momentum: config.momentum?.enabled !== false,
-        speed: scrollSpeed.current,
+        speed: speedSetting / 10,
         maxFPS: config.maxFPS ?? 0,
         tileMemoryMB: config.tileMemoryMB ?? 128,
         tickWindowMs: config.momentum?.tickWindowMs ?? 150,
+        smoothDurationMs: durationMs,
         maxDecodedMB: config.maxDecodedMB,
         getDocumentId: () => reading.current?.sceneId ?? '',
         getPages: () =>
@@ -2216,23 +2312,69 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     config.maxFPS,
     config.tileMemoryMB,
     config.momentum?.enabled,
-    config.momentum?.speed,
     config.momentum?.tickWindowMs,
     config.maxDecodedMB,
+    configuredSpeed,
+    configuredSmoothDuration,
     input.reserveRender,
   ]);
 
-  // UI — native scroll container; all tuning/visible styling comes from JSON.
+  // STATE AND COORDINATION — apply accepted values live, then persist their overrides.
   useEffect(() => {
-    input.publishScrollSpeed(scrollSpeed.current);
-    return input.registerScrollSpeed((speed) => {
-      if (!finite(speed, 0.1, 10)) return { ok: false, error: 'Scroll speed must be 0.1–10×' };
-      scrollSpeed.current = speed;
-      surface.current?.setSpeed(speed);
-      input.publishScrollSpeed(speed);
-      return { ok: true };
+    const initial = scrollSpeedSetting.current;
+    if (initial === null) return undefined;
+    input.publishScrollSpeed(initial);
+    return input.registerScrollSpeed(async (change) => {
+      if (!finite(change.value, 1, 100)) return { ok: false, error: 'Scroll speed must be 10–100' };
+      const previous = scrollSpeedSetting.current;
+      scrollSpeedSetting.current = change.value;
+      surface.current?.setSpeed(change.value / 10);
+      input.publishScrollSpeed(change.value);
+      const saved = await input.persistPreference({
+        id: 'scrollSpeed',
+        value: change.reset ? null : change.value,
+      });
+      if (!saved.ok && scrollSpeedSetting.current === change.value && previous !== null) {
+        scrollSpeedSetting.current = previous;
+        surface.current?.setSpeed(previous / 10);
+        input.publishScrollSpeed(previous);
+      }
+      return saved;
     });
-  }, [input.registerScrollSpeed, input.publishScrollSpeed]);
+  }, [
+    configuredSpeed,
+    input.registerScrollSpeed,
+    input.publishScrollSpeed,
+    input.persistPreference,
+  ]);
+  useEffect(() => {
+    const initial = smoothDuration.current;
+    if (initial === null) return undefined;
+    input.publishSmoothScrollDuration(initial);
+    return input.registerSmoothScrollDuration(async (change) => {
+      if (!Number.isInteger(change.value) || !finite(change.value, 100, 2000))
+        return { ok: false, error: 'Smooth-scroll duration must be 100–2000 ms' };
+      const previous = smoothDuration.current;
+      smoothDuration.current = change.value;
+      surface.current?.setSmoothDuration(change.value);
+      input.publishSmoothScrollDuration(change.value);
+      const saved = await input.persistPreference({
+        id: 'smoothScrollDurationMs',
+        value: change.reset ? null : change.value,
+      });
+      if (!saved.ok && smoothDuration.current === change.value && previous !== null) {
+        smoothDuration.current = previous;
+        surface.current?.setSmoothDuration(previous);
+        input.publishSmoothScrollDuration(previous);
+      }
+      return saved;
+    });
+  }, [
+    configuredSmoothDuration,
+    input.registerSmoothScrollDuration,
+    input.publishSmoothScrollDuration,
+    input.persistPreference,
+  ]);
   const status = display.error
     ? `${config.labels.failed}: ${display.error}`
     : display.phase
@@ -2242,10 +2384,11 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         : config.labels.empty;
   const overlayVisible = Boolean(display.phase || display.error);
 
-  // LOGIC — publish the reader's phase so the Windows area can reflect its state.
+  // STATE AND COORDINATION — publish phase so the Windows area can reflect reader state.
   useEffect(() => {
     input.publishState({ phase: display.phase, total: display.total });
   }, [display.phase, display.total, input.publishState]);
+  // UI AND LOCAL EVENTS — native scroll container and configured status presentation.
   return (
     <Box
       className="fill"

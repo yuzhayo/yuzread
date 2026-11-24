@@ -8,6 +8,7 @@ import { appId, createAppWindow, createNativeWindowActions } from './AppWindow.c
 import { createDiagnosticLog } from './DiagnosticLog.cjs';
 import { createSectionHover } from './SectionHover.cjs';
 import { registerReaderScheme, createCbzReader } from './reader/CbzArchive.cjs';
+import { createReaderPreferences } from './reader/ReaderPreferences.cjs';
 import type { DiagnosticRecord, InvokeChannels, NativeHandlers, Result } from '../ShellHost.js';
 
 // CONFIG AND CONTRACT — incoming IPC is unknown; handlers satisfy the wire map.
@@ -47,16 +48,21 @@ const channels = [
   'reader:release',
   'reader:diagnostics',
   'reader:render-reserve',
+  'reader:preference',
 ] as const satisfies readonly (keyof InvokeChannels)[];
 
 // LOGIC — emitted entry remains one level below the original application root.
 const root = path.resolve(__dirname, '..');
 const qa = process.argv.includes('--qa') && !app.isPackaged;
+const qaProfileArgument = process.argv.find((value) => value.startsWith('--qa-profile='));
+const qaProfileName = qaProfileArgument?.slice('--qa-profile='.length);
+if (qa && qaProfileName && !/^[A-Za-z0-9-]{1,64}$/.test(qaProfileName))
+  throw new Error('Invalid QA profile name');
 registerReaderScheme();
 app.setName('Yuzread');
 if (process.platform === 'win32') app.setAppUserModelId(appId);
 const userData = qa
-  ? path.join(root, '.runtime', `qa-profile-${process.pid}`)
+  ? path.join(root, '.runtime', `qa-profile-${qaProfileName || process.pid}`)
   : path.join(app.getPath('appData'), 'Yuzread');
 fs.mkdirSync(userData, { recursive: true });
 app.setPath('userData', userData);
@@ -64,6 +70,7 @@ const ownsLock = qa || app.requestSingleInstanceLock();
 let window: BrowserWindow | undefined;
 let log: ReturnType<typeof createDiagnosticLog> | undefined;
 let reader: ReturnType<typeof createCbzReader> | undefined;
+let preferences: ReturnType<typeof createReaderPreferences> | undefined;
 let quitting = false;
 
 if (!ownsLock) app.quit();
@@ -91,6 +98,8 @@ else {
         throw new Error('UI build is missing. Run npm run build or start.cmd.');
       const currentLog = createDiagnosticLog(app.getPath('userData'));
       log = currentLog;
+      const currentPreferences = createReaderPreferences(app.getPath('userData'), screenConfig);
+      preferences = currentPreferences;
       const currentWindow = createAppWindow(root, config.window);
       window = currentWindow;
       const archive = createCbzReader(
@@ -109,6 +118,7 @@ else {
       const handlers = {
         'shell:bootstrap': () => ({
           config,
+          readerPreferences: currentPreferences.snapshot(),
           windowState: native.snapshot(),
           hoveredSections: sectionHover.snapshot(),
           logPath: currentLog.filePath,
@@ -134,6 +144,7 @@ else {
         'reader:diagnostics': (events: unknown) => archive.diagnostics(events),
         'reader:render-reserve': (owner: unknown, bytes: unknown, limit: unknown) =>
           archive.reserveRender(owner, bytes, limit),
+        'reader:preference': (update: unknown) => currentPreferences.update(update),
         'shell:diagnostics': (records: unknown): Result | Promise<Result> => {
           if (!Array.isArray(records) || records.length > 200 || !records.every(diagnosticRecord))
             return { ok: false, error: 'Invalid diagnostic batch' };
@@ -163,10 +174,12 @@ else {
     });
   app.on('window-all-closed', () => app.quit());
   app.on('before-quit', (event) => {
-    if ((log || reader) && !quitting) {
+    if ((log || reader || preferences) && !quitting) {
       event.preventDefault();
       quitting = true;
-      void Promise.allSettled([reader?.dispose(), log?.flush()]).finally(() => app.quit());
+      void Promise.allSettled([reader?.dispose(), log?.flush(), preferences?.flush()]).finally(() =>
+        app.quit(),
+      );
     }
   });
 }

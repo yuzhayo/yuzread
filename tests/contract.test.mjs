@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { resolveVisuals, validBounds } from '../screen/shared/logic/VisualConfig.ts';
 import { discoverAreas } from '../screen/shared/logic/AreaDiscovery.ts';
 import { validateScreenConfig, resolveChildren } from '../screen/shared/logic/ConfigValidation.ts';
@@ -15,17 +16,21 @@ import {
   connectionProblems,
   retireParents,
 } from '../screen/shared/logic/ParentConnections.ts';
-import * as WindowsArea from '../screen/windows-area/WindowsArea.tsx';
-import * as Body from '../screen/body/Body.tsx';
-import * as ActionBar from '../screen/action-bar/ActionBar.tsx';
-import * as BottomBar from '../screen/bottom-bar/BottomBar.tsx';
-import * as Navigation from '../screen/bottom-bar/BottomBarChapterNavigation.tsx';
-import * as Load from '../screen/windows-area/WindowsAreaBtnLoad.tsx';
-import * as Speed from '../screen/windows-area/WindowsAreaBtnScrollSpeed.tsx';
-import * as SettingScreen from '../screen/windows-area/WindowsAreaBtnSettingScreen.tsx';
-import * as Close from '../screen/windows-area/WindowsAreaBtnClose.tsx';
-import * as DefaultSize from '../screen/windows-area/WindowsAreaBtnDefaultSize.tsx';
-import * as Reader from '../screen/body/reader/BodyReader.tsx';
+import * as WindowsArea from '../screen/reader/windows-area/WindowsArea.tsx';
+import * as Body from '../screen/reader/body/Body.tsx';
+import * as ActionBar from '../screen/reader/action-bar/ActionBar.tsx';
+import * as BottomBar from '../screen/reader/bottom-bar/BottomBar.tsx';
+import * as Navigation from '../screen/reader/bottom-bar/BottomBarChapterNavigation.tsx';
+import * as Status from '../screen/reader/bottom-bar/BottomBarStatus.tsx';
+import * as Load from '../screen/reader/windows-area/WindowsAreaBtnLoad.tsx';
+import * as Speed from '../screen/reader/windows-area/WindowsAreaBtnScrollSpeed.tsx';
+import * as SettingScreen from '../screen/reader/windows-area/WindowsAreaBtnSettingScreen.tsx';
+import * as SmoothSection from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSectionSmoothScroll.tsx';
+import { discoverSettingSections } from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSections.ts';
+import * as Close from '../screen/reader/windows-area/WindowsAreaBtnClose.tsx';
+import * as DefaultSize from '../screen/reader/windows-area/WindowsAreaBtnDefaultSize.tsx';
+import * as Title from '../screen/reader/windows-area/WindowsAreaTitle.tsx';
+import * as Reader from '../screen/reader/body/reader/BodyReader.tsx';
 import {
   advanceMomentum,
   momentumImpulse,
@@ -37,27 +42,43 @@ import {
   appendWheelTick,
   advanceWheelGesture,
   scaleWheelGesture,
-} from '../screen/body/reader/BodyReaderPixiWorkerPolicy.ts';
+  scaleWheelDuration,
+} from '../screen/reader/body/reader/BodyReaderPixiWorkerPolicy.ts';
 const require = createRequire(import.meta.url),
-  { validateWindowConfig } = require('../electron-built/WindowConfig.cjs');
+  { validateWindowConfig } = require('../electron-built/WindowConfig.cjs'),
+  { createReaderPreferences } = require('../electron-built/reader/ReaderPreferences.cjs');
 const source = {
   ...JSON.parse(await readFile(new URL('../screen/config.json', import.meta.url), 'utf8')),
   window: JSON.parse(await readFile(new URL('../electron/config.json', import.meta.url), 'utf8')),
 };
-const catalog = [
-  ['windows-area', WindowsArea],
-  ['body', Body],
-  ['action-bar', ActionBar],
-  ['bottom-bar', BottomBar],
-].map(([folder, module]) => ({
-  areaId: module.areaId,
-  parentName: module.parentName,
-  filePath: `${folder}/${module.parentName}.tsx`,
-  folder,
-  bind: module.bind,
-  valid: true,
-}));
 const diagnostics = () => createDiagnostics(async () => ({ ok: true }));
+const runtimeModule = (module) => module['module.exports'] ?? module;
+const modules = {
+  './reader/windows-area/WindowsArea.tsx': WindowsArea,
+  './reader/windows-area/WindowsAreaBtnSettingScreen.tsx': SettingScreen,
+  './reader/windows-area/WindowsAreaBtnScrollSpeed.tsx': Speed,
+  './reader/windows-area/WindowsAreaBtnLoad.tsx': Load,
+  './reader/windows-area/WindowsAreaBtnClose.tsx': Close,
+  './reader/windows-area/WindowsAreaBtnDefaultSize.tsx': DefaultSize,
+  './reader/windows-area/WindowsAreaTitle.tsx': Title,
+  './reader/body/Body.tsx': Body,
+  './reader/body/reader/BodyReader.tsx': Reader,
+  './reader/action-bar/ActionBar.tsx': ActionBar,
+  './reader/bottom-bar/BottomBar.tsx': BottomBar,
+  './reader/bottom-bar/BottomBarChapterNavigation.tsx': Navigation,
+  './reader/bottom-bar/BottomBarStatus.tsx': Status,
+};
+const catalogSink = diagnostics();
+const catalog = await discoverAreas(
+  Object.fromEntries(
+    Object.entries(modules).map(([fileName, module]) => [
+      fileName,
+      async () => runtimeModule(module),
+    ]),
+  ),
+  catalogSink,
+);
+assert.deepEqual(catalogSink.getSnapshot(), []);
 const empty = { endpoints: {}, settle: async () => {}, dispose() {} };
 // Native fixture reuses actual root port contracts, not fabricated permissive codecs.
 const providers = validateScreenConfig(
@@ -82,6 +103,8 @@ const native = {
     release: body.endpoints.release,
     readerMetrics: body.endpoints.readerMetrics,
     renderReserve: body.endpoints.renderReserve,
+    readerPreferences: body.endpoints.readerPreferences,
+    saveReaderPreference: body.endpoints.saveReaderPreference,
     issues: bottom.endpoints.issues,
     labels: bottom.endpoints.labels,
   },
@@ -101,13 +124,7 @@ const definitions = [
   ['WindowsAreaBtnDefaultSize.tsx', DefaultSize],
   ['reader/BodyReader.tsx', Reader],
   ['BottomBarChapterNavigation.tsx', Navigation],
-].map(([fileName, module]) => ({
-  componentId: module.componentId,
-  fileName,
-  configKeys: module.configKeys,
-  partKeys: module.partKeys ?? [],
-  bind: (config, report) => (module.validateConfig(config, report) ? () => null : null),
-}));
+].map(([fileName, module]) => ({ ...module.child, fileName }));
 const nodes = (config, id) => {
   const bound = inspect(config).plan.areas.find((node) => node.config.id === id);
   return resolveChildren(
@@ -126,7 +143,7 @@ test('schema and real area roots preserve enabled area ownership', () => {
     plan.areas.map((a) => a.config.id),
     ['windowsBar', 'body', 'bottomBar'],
   );
-  assert.equal(plan.connections.length, 18);
+  assert.equal(plan.connections.length, 22);
   assert.equal(plan.areas[0].config.parentName, 'WindowsArea');
 });
 test('setting screen config validates icons, header parts and dimensions without moving existing controls', () => {
@@ -148,6 +165,7 @@ test('setting screen config validates icons, header parts and dimensions without
     config.sections.every(
       (section) =>
         typeof section.id === 'string' &&
+        typeof section.componentId === 'string' &&
         typeof section.label === 'string' &&
         typeof section.expanded === 'boolean',
     ),
@@ -161,11 +179,13 @@ test('setting screen config validates icons, header parts and dimensions without
     { labels: { ...config.labels, title: '' } },
     {
       sections: [
-        { id: 'same', label: 'A', expanded: true },
-        { id: 'same', label: 'B', expanded: false },
+        { id: 'same', componentId: 'settings.one', label: 'A', expanded: true },
+        { id: 'same', componentId: 'settings.two', label: 'B', expanded: false },
       ],
     },
-    { sections: [{ id: 'bad id', label: 'A', expanded: true }] },
+    {
+      sections: [{ id: 'bad id', componentId: 'settings.bad', label: 'A', expanded: true }],
+    },
     { sections: 'not-a-list' },
   ])
     assert.equal(
@@ -177,17 +197,18 @@ test('setting screen config validates icons, header parts and dimensions without
   assert.equal(bar.children.find((child) => child.id === 'readerOpen').bounds.x, 85);
   assert.equal(group(source).bounds.x, 89.75);
 });
-test('setting screen section cards collapse without losing their mounted body', () => {
-  const sections = [
-    { id: 'display', label: 'Display', expanded: true },
-    { id: 'audio', label: 'Audio', expanded: false },
-  ];
-  assert.deepEqual(SettingScreen.initialSectionState(sections), { display: true, audio: false });
-  const collapsed = SettingScreen.toggleSectionState({ display: true, audio: false }, 'display');
-  assert.equal(collapsed.display, false);
-  assert.equal(collapsed.audio, false);
-  assert.equal(SettingScreen.toggleSectionState(collapsed, 'audio').audio, true);
-  assert.equal(SettingScreen.toggleSectionState(collapsed, 'missing').missing, true);
+test('setting screen sections self-declare shared-card bodies without duplicate identities', () => {
+  const sections = discoverSettingSections({ SmoothSection });
+  assert.deepEqual([...sections.keys()], ['reader.smoothScroll']);
+  const config = nodes(source, 'windowsBar').find(
+    (node) => node.config?.id === 'settingScreen',
+  ).config;
+  for (const section of config.sections)
+    assert.equal(
+      sections.get(section.componentId).validate(section, () => {}),
+      true,
+    );
+  assert.throws(() => discoverSettingSections({ SmoothSection, copy: SmoothSection }));
 });
 test('setting screen retained position clamps only to the available viewport', () => {
   assert.deepEqual(
@@ -202,6 +223,62 @@ test('setting screen retained position clamps only to the available viewport', (
     SettingScreen.clampSettingScreenPosition({ x: 80, y: 120 }, 440, 320, 300, 200),
     { x: 0, y: 0 },
   );
+});
+test('reader preferences persist only validated overrides and Reset restores configured defaults', async () => {
+  const directory = fileURLToPath(
+    new URL(`../.agents-temp/reader-preferences-${process.pid}`, import.meta.url),
+  );
+  await rm(directory, { recursive: true, force: true });
+  await mkdir(directory, { recursive: true });
+  const config = {
+    controls: [
+      {
+        preference: {
+          id: 'scrollSpeed',
+          kind: 'number',
+          default: 10,
+          min: 10,
+          max: 100,
+          step: 1,
+        },
+      },
+      {
+        preference: {
+          id: 'smoothScrollDurationMs',
+          kind: 'number',
+          default: 250,
+          min: 100,
+          max: 2000,
+          step: 10,
+        },
+      },
+    ],
+  };
+  try {
+    const preferences = createReaderPreferences(directory, config);
+    assert.deepEqual(preferences.snapshot().values, {
+      scrollSpeed: 10,
+      smoothScrollDurationMs: 250,
+    });
+    assert.deepEqual(await preferences.update({ id: 'scrollSpeed', value: 37.4 }), { ok: true });
+    assert.deepEqual(await preferences.update({ id: 'smoothScrollDurationMs', value: 604 }), {
+      ok: true,
+    });
+    assert.deepEqual(await preferences.update({ id: 'scrollSpeed', value: null }), { ok: true });
+    await preferences.flush();
+    assert.deepEqual(
+      JSON.parse(await readFile(`${directory}/reader-preferences.json`, 'utf8')).values,
+      { smoothScrollDurationMs: 600 },
+    );
+    const restored = createReaderPreferences(directory, config);
+    assert.deepEqual(restored.snapshot().values, {
+      scrollSpeed: 10,
+      smoothScrollDurationMs: 600,
+    });
+    assert.equal((await restored.update({ id: 'unknown', value: 1 })).ok, false);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
 });
 test('load folder settings stay owned by the Load child and validate optional fields', () => {
   const config = nodes(source, 'windowsBar').find(
@@ -282,7 +359,14 @@ test('malformed child or row overflow rejects only the configured group', () => 
   }
 });
 test('duplicate area roots reject every conflict regardless of catalog order', () => {
-  const bad = { ...catalog[0], valid: false, bind: null, filePath: 'windows-area/Conflict.tsx' };
+  const windowsRoot = catalog.find((entry) => entry.areaId === 'windowsBar');
+  assert.ok(windowsRoot);
+  const bad = {
+    ...windowsRoot,
+    valid: false,
+    bind: null,
+    filePath: 'reader/windows-area/Conflict.tsx',
+  };
   for (const entries of [
     [bad, ...catalog],
     [...catalog, bad],
@@ -350,15 +434,15 @@ test('a child can live in a named parent subfolder without a top-level registry 
     source.presets,
     sink,
   );
-  assert.equal(result[0].config.filePath, 'body/reader/renamed/BodyReader.tsx');
+  assert.equal(result[0].config.filePath, 'reader/body/reader/renamed/BodyReader.tsx');
   assert.deepEqual(sink.getSnapshot(), []);
 });
 test('discovery loads root metadata, ignores leaves, and retains invalid identities', async () => {
   const sink = diagnostics();
   const result = await discoverAreas(
     {
-      './windows-area/WindowsArea.tsx': async () => WindowsArea,
-      './windows-area/WindowsAreaBtnLoad.tsx': async () => Load,
+      './reader/windows-area/WindowsArea.tsx': async () => runtimeModule(WindowsArea),
+      './reader/windows-area/WindowsAreaBtnLoad.tsx': async () => runtimeModule(Load),
       './bad/Bad.tsx': async () => ({ areaId: 'windowsBar', parentName: 'Bad' }),
       './failed/Failed.tsx': async () => {
         throw new Error('fixture failure');
@@ -654,27 +738,24 @@ test('momentum handles reversed input and rejects unbounded/non-finite speed', (
   });
 });
 test('wheel gesture starts immediately, joins same-direction ticks inside 150 ms and retains velocity', () => {
-  const first = appendWheelTick(createWheelGesture(), 120, 0);
-  const started = advanceWheelGesture(first, 0.006, 6);
+  const first = appendWheelTick(createWheelGesture(), 120, 0, 1, 150, 250);
+  const started = advanceWheelGesture(first, 0.006, 6, 1, 150, 250);
   assert.ok(started.distance > 0);
   assert.ok(started.state.velocity > 0);
-  const joined = appendWheelTick(started.state, 120, 100);
+  const joined = appendWheelTick(started.state, 120, 100, 1, 150, 250);
   assert.equal(joined.velocity, started.state.velocity);
   assert.ok(joined.rate > first.rate);
-  assert.equal(appendWheelTick(first, 120, 150).rate, 960);
-  assert.equal(appendWheelTick(first, 120, 151).rate, first.rate);
+  assert.equal(appendWheelTick(first, 120, 150, 1, 150, 250).rate, 960);
+  assert.equal(appendWheelTick(first, 120, 151, 1, 150, 250).rate, first.rate);
   const config = nodes(source, 'body').find((node) => node.config?.id === 'reader').config;
   assert.equal(
-    Reader.validateConfig(
-      { ...config, momentum: { enabled: true, speed: 1, tickWindowMs: 150 } },
-      () => {},
-    ),
+    Reader.validateConfig({ ...config, momentum: { enabled: true, tickWindowMs: 150 } }, () => {}),
     true,
   );
   for (const value of [0, 49, 301, 150.5, '150'])
     assert.equal(
       Reader.validateConfig(
-        { ...config, momentum: { enabled: true, speed: 1, tickWindowMs: value } },
+        { ...config, momentum: { enabled: true, tickWindowMs: value } },
         () => {},
       ),
       false,
@@ -693,11 +774,11 @@ test('wheel gesture preserves isolated/stream travel and suppresses the old per-
     for (let n = 0; n < hz * 5; n++) {
       const time = (n * 1000) / hz;
       while (index < 20 && index * 100 <= time + 1e-8) {
-        state = appendWheelTick(state, 120, index * 100);
+        state = appendWheelTick(state, 120, index * 100, 1, 150, 250);
         target += momentumImpulse(120);
         index++;
       }
-      const next = advanceWheelGesture(state, 1 / hz, ((n + 1) * 1000) / hz);
+      const next = advanceWheelGesture(state, 1 / hz, ((n + 1) * 1000) / hz, 1, 150, 250);
       state = next.state;
       position += next.distance;
       const old = advanceMomentum(velocity, target, 1 / hz);
@@ -717,10 +798,10 @@ test('wheel gesture preserves isolated/stream travel and suppresses the old per-
     assert.ok(position > 3598 && position <= 3600);
     assert.deepEqual(state, createWheelGesture());
     totals.push(position);
-    let single = appendWheelTick(createWheelGesture(), 120, 0),
+    let single = appendWheelTick(createWheelGesture(), 120, 0, 1, 150, 250),
       travel = 0;
     for (let n = 0; n < hz * 3; n++) {
-      const next = advanceWheelGesture(single, 1 / hz, ((n + 1) * 1000) / hz);
+      const next = advanceWheelGesture(single, 1 / hz, ((n + 1) * 1000) / hz, 1, 150, 250);
       single = next.state;
       travel += next.distance;
     }
@@ -730,20 +811,47 @@ test('wheel gesture preserves isolated/stream travel and suppresses the old per-
   assert.ok(Math.max(...totals) - Math.min(...totals) < 0.1);
 });
 test('wheel gesture discards old-direction credit, reverses promptly and scales active speed without a jump', () => {
-  let state = appendWheelTick(createWheelGesture(), 120, 0);
-  for (let n = 0; n < 16; n++) state = advanceWheelGesture(state, 0.006, (n + 1) * 6).state;
-  const reversed = appendWheelTick(state, -120, 100);
+  let state = appendWheelTick(createWheelGesture(), 120, 0, 1, 150, 250);
+  for (let n = 0; n < 16; n++)
+    state = advanceWheelGesture(state, 0.006, (n + 1) * 6, 1, 150, 250).state;
+  const reversed = appendWheelTick(state, -120, 100, 1, 150, 250);
   assert.equal(reversed.remaining, -180);
   assert.equal(reversed.velocity, state.velocity);
   let back = reversed;
-  for (let n = 0; n < 20; n++) back = advanceWheelGesture(back, 0.006, 106 + n * 6).state;
+  for (let n = 0; n < 20; n++)
+    back = advanceWheelGesture(back, 0.006, 106 + n * 6, 1, 150, 250).state;
   assert.ok(back.velocity < 0, 'opposing ticks must not wait for old coasting to finish');
-  const normal = advanceWheelGesture(state, 0.006, 102),
-    fast = advanceWheelGesture(scaleWheelGesture(state, 10, 10), 0.006, 102, 10);
+  const normal = advanceWheelGesture(state, 0.006, 102, 1, 150, 250),
+    fast = advanceWheelGesture(scaleWheelGesture(state, 10, 10, 250), 0.006, 102, 10, 150, 250);
   assert.ok(Math.abs(fast.distance - normal.distance * 10) < 1e-8);
   assert.ok(Math.abs(fast.state.velocity - normal.state.velocity * 10) < 1e-8);
-  assert.equal(appendWheelTick(state, NaN, 100), state);
-  assert.equal(appendWheelTick(state, 120, NaN), state);
+  assert.equal(appendWheelTick(state, NaN, 100, 1, 150, 250), state);
+  assert.equal(appendWheelTick(state, 120, NaN, 1, 150, 250), state);
+  const slower = scaleWheelDuration(state, 250, 2000, 1);
+  assert.equal(slower.remaining, state.remaining);
+  assert.ok(Math.abs(slower.velocity) < Math.abs(state.velocity));
+});
+test('smooth-scroll duration changes delivery time without changing wheel distance', () => {
+  const run = (durationMs) => {
+    let state = appendWheelTick(createWheelGesture(), 120, 0, 1, 150, durationMs),
+      distance = 0,
+      early = 0;
+    for (let frame = 1; frame <= 2400; frame++) {
+      const next = advanceWheelGesture(state, 1 / 120, (frame * 1000) / 120, 1, 150, durationMs);
+      state = next.state;
+      distance += next.distance;
+      if (frame === 24) early = distance;
+      if (!next.moving) break;
+    }
+    return { distance, early, state };
+  };
+  const quick = run(100),
+    soft = run(2000);
+  assert.ok(quick.early > soft.early * 4);
+  assert.ok(quick.distance > 178 && quick.distance <= 180);
+  assert.ok(soft.distance > 178 && soft.distance <= 180);
+  assert.deepEqual(quick.state, createWheelGesture());
+  assert.deepEqual(soft.state, createWheelGesture());
 });
 test('speed control clamps configured values and retains tenth-step multipliers', () => {
   assert.equal(Speed.normalizeScrollSpeed(5, 10, 100, 1), 10);
@@ -758,7 +866,14 @@ test('speed control clamps configured values and retains tenth-step multipliers'
     true,
   );
   assert.equal(
-    Speed.validateConfig({ ...config, normal: 101 }, () => {}),
+    Speed.validateConfig(
+      { ...config, preference: { ...config.preference, default: 101 } },
+      () => {},
+    ),
+    false,
+  );
+  assert.equal(
+    Speed.validateConfig({ ...config, slider: { thumbSize: 0, trackSize: 3 } }, () => {}),
     false,
   );
 });

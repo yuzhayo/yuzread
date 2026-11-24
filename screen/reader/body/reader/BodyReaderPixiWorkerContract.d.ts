@@ -1,4 +1,4 @@
-import type { ReaderPreparedPage, ReaderWorkPriority, Result } from '../../../ShellHost.js';
+import type { ReaderPreparedPage, ReaderWorkPriority, Result } from '../../../../ShellHost.js';
 // CONFIG AND CONTRACT — local structured-clone messages, not an application bridge.
 export interface PixiView {
   revision: number;
@@ -34,6 +34,7 @@ export type PixiInput =
       maxFPS: number;
       tileMemoryMB: number;
       tickWindowMs: number;
+      smoothDurationMs: number;
     }
   | { version: 1; kind: 'layout'; view: PixiView; pages: PixiPageBox[] }
   | { version: 1; kind: 'view'; view: PixiView }
@@ -50,6 +51,13 @@ export type PixiInput =
   | { version: 1; kind: 'stop'; control: number; y: number; maxY: number }
   | { version: 1; kind: 'rebase'; control: number; delta: number; maxY: number }
   | { version: 1; kind: 'speed'; control: number; speed: number; maxY: number }
+  | {
+      version: 1;
+      kind: 'smooth-duration';
+      control: number;
+      durationMs: number;
+      maxY: number;
+    }
   | { version: 1; kind: 'ack'; serial: number }
   | { version: 1; kind: 'reservation'; request: number; result: Result }
   | { version: 1; kind: 'dispose' };

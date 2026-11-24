@@ -39,10 +39,25 @@ const preloadWindowResult = (
 ): value is import('../ShellHost.js').WindowActionResult =>
   preloadFailure(value) ||
   (preloadRecord(value) && value.ok === true && preloadWindowState(value.state));
+const preloadPreferenceSnapshot = (
+  value: unknown,
+): value is import('../ShellHost.js').ReaderPreferenceSnapshot =>
+  preloadRecord(value) &&
+  value.version === 1 &&
+  preloadRecord(value.values) &&
+  Object.keys(value.values).length <= 64 &&
+  Object.entries(value.values).every(
+    ([id, item]) =>
+      /^[a-z][A-Za-z0-9]{0,63}$/.test(id) &&
+      typeof item === 'number' &&
+      Number.isFinite(item) &&
+      Math.abs(item) <= 1e9,
+  );
 const preloadBootstrap = (value: unknown): value is import('../ShellHost.js').BootstrapResult =>
   preloadFailure(value) ||
   (preloadRecord(value) &&
     preloadWindowState(value.windowState) &&
+    preloadPreferenceSnapshot(value.readerPreferences) &&
     preloadStrings(value.hoveredSections) &&
     typeof value.logPath === 'string' &&
     typeof value.development === 'boolean' &&
@@ -213,6 +228,7 @@ const shellHost = {
     diagnostics: (events) => preloadInvoke('reader:diagnostics', [events], preloadResult),
     reserveRender: (owner, bytes, limit) =>
       preloadInvoke('reader:render-reserve', [owner, bytes, limit], preloadResult),
+    setPreference: (update) => preloadInvoke('reader:preference', [update], preloadResult),
   },
 } satisfies import('../ShellHost.js').ShellHost;
 contextBridge.exposeInMainWorld('shellHost', shellHost);

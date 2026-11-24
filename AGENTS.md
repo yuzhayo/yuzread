@@ -72,15 +72,16 @@ timestamp aligned across window/worker with performance.timeOrigin. The worker/
 pure policy own one gesture: same-direction ticks within momentum.tickWindowMs
 (default 150, valid 50–300) update a smoothed rate rather than add sharp impulses.
 First input responds immediately; the window never batches/delays its start.
-Velocity blends over 40 ms, with 20-ms opposing-direction braking. Quiet input
-coasts on the existing 250-ms scale. Bounded signed distance credit preserves the
+Velocity blends over 40 ms, with 20-ms opposing-direction braking. Quiet input uses
+the persistent Smooth scroll duration (configured default 250 ms, valid 100–2000).
+Changing duration rescales active rate/velocity while bounded signed distance credit preserves the
 1.5 gain/about 180 px per 120-unit notch and prevents runaway remaining travel.
 Reversal drops old-direction credit while retaining current velocity/position;
 speed changes scale velocity/rate/credit together. Tile waits do not spend credit.
 
 Stop/zoom/picker/blur/hidden/boundaries clear gesture state; no idle sensor timer.
 Keep precision small-delta/reduced-motion/direct inputs separate to avoid double
-touchpad inertia. No UI/native/dependency change or reintroduced FPS ceiling.
+touchpad inertia. The duration UI/persistence does not reintroduce an FPS ceiling.
 The previous impulse helper remains a pure historical baseline, not the active
 worker controller. This supersedes earlier instructions to keep impulse math fixed.
 
@@ -312,36 +313,93 @@ pages, or count worker/ticker callbacks as presented FPS. Measure the requested 
 path before claiming the performance goal. Diagnostics stay off by default.
 
 Future owners are Downloader -> Library -> Reader, with standalone Library asking
-the independent Reader to open content. Those applications, chapter-control UI,
-auto-scroll/speed UI, drag/drop and Windows CBZ installation are not this migration.
-On completion, transfer lasting decisions/evidence here and remove the finished plan.
+the independent Reader to open content. Reader, Library and Downloader are sibling
+applications with separate screens, logic, processes, identities and state; sharing
+an Electron runtime must not turn Library or Downloader into Reader internals.
+
+Current ordering/agent boundary — 2026-11-24: the sibling ownership tree and
+parent-local child registration are now established first. The remaining connection
+skeleton owns only stable application identities,
+launch/role boundaries and explicit handoff contracts: Downloader completes files
+into the filesystem contract consumed by Library; Library asks Reader to open a
+selected CBZ through the agreed external-open contract, with the normal Windows CBZ
+opener as its configured fallback. It must make the attachment points and ownership
+visible by folder and filename without implementing Library catalog UI/business logic
+or Downloader acquisition logic. The operator will build Library and Downloader
+separately with another agent after this skeleton is clear. That agent must consume
+the agreed contracts rather than import Reader internals or invent a second connection
+path. Exact executable names, role identities, userData locations, handoff payloads
+and Library filesystem layout remain design decisions until explicitly approved.
+
+The Reader restructuring does not authorize Library/Downloader business features.
+Chapter-control UI, auto-scroll/speed UI and Windows CBZ installation are also outside
+this ordering unless explicitly included. On completion, transfer lasting connection
+decisions/evidence here and remove the finished plan.
 
 The operator navigates by filenames and folder hierarchy. Name each file after
 its actual job. Organize by the thing that owns the behavior, not by technical
 layers. Prefer named sections inside an owning file to scattering one feature
-across many files. Do not create root `logic/`, `view/`, `components/`, `desktop/`
-or `reader/` folders again.
+across many files. Do not create unowned root `logic/`, `view/`, `components/` or
+`desktop/` dumping grounds. `screen/reader`, `screen/library` and
+`screen/downloader` are explicit sibling application owners, not technical layers.
 
 ```text
-electron/                    Native app, OS integration and Electron runtime
-  config.json                Native title, sizing, startup policy and icon path
-  assets/                    Native app icon files
-  reader/CbzArchive.cts       Reader's native archive worker and page protocol
-screen/                      Everything displayed in the native window
-  config.json                Schema-2 areas, local children, connections and presets
-  windows-area/              Hover title bar and its controls/commands
-    WindowsArea.tsx          Dumb parent: local child assembly and forwarding
-    WindowsAreaBtnLoad.tsx   Own Load UI and behavior
-    WindowsAreaBtnClose.tsx  Own Close UI and behavior
-    WindowsAreaBtnDefaultSize.tsx  Own default-square UI and behavior
-    WindowsAreaTitle.tsx     Retained disabled title child
-  body/                      Main content owner
-    Body.tsx                 Dumb parent: mount and forward to its reader
-    reader/BodyReader.tsx    Reader UI, decoded pages, loading and scrolling
-  shared/components/         Reusable UI mechanics
-  shared/logic/              Reusable non-UI mechanics, no feature algorithms
-tests/                       Existing checks, not application runtime code
+electron/                         Native app, OS integration and Electron runtime
+  config.json                     Native title, sizing, startup policy and icon path
+  assets/                         Native app icon files
+  reader/CbzArchive.cts            Reader archive worker and page protocol
+  library/                        Reserved future Library-native owner
+  downloader/                     Reserved future Downloader-native owner
+screen/                           Browser/UI boundary
+  config.json                     Schema-2 Reader areas/connections/presets
+  shared/components/              Reusable UI mechanics
+  shared/logic/                   Reusable non-UI mechanics, no feature algorithms
+  reader/                         Complete current Reader application
+    windows-area/                 Top controls; dumb parent + contract + children
+    body/                         Body parent/contract and GPU reader
+    bottom-bar/                   Navigation parent/contract and children
+    action-bar/                   Retained disabled area
+  library/                        Reserved future standalone Library UI owner
+  downloader/                     Reserved future standalone Downloader UI owner
+tests/                            Existing checks, not application runtime code
 ```
+
+### Sibling ownership and child self-registration — delivered 2026-11-24
+
+The current Reader moved one file at a time under `screen/reader/`; its old area
+folders were removed. `screen/library`, `screen/downloader`, `electron/library` and
+`electron/downloader` reserve the separately owned sibling applications without
+shipping placeholder business logic. Exact role launch, executable identity,
+userData and external-open/filesystem contracts remain the next connection-skeleton
+decisions, not hidden assumptions in this structural migration.
+
+The existing generic TSX scope now recognizes explicit `child` registrations.
+Discovery derives each real path, matches folder + parentName, supports nested
+children, sorts deterministically and reports invalid/unowned registrations. Children
+validate only their named request/state ports. WindowsArea, Body, BottomBar and
+ActionBar contain no child imports or handwritten child lists; named `*Contract.ts`
+files own their relay codecs. `screen/config.json` retains the same IDs, geometry,
+appearance, connections and behavior with only Reader folder paths changed.
+
+Canonical sectioning follow-up normalized BodyReader, its Pixi bridge/worker, Setting
+Screen, Scroll Speed and chapter navigation one file at a time. Canonical headings
+identify contract, registration, calculations, state/coordination, UI/local events
+and lifecycle/cleanup; specialized Reader headings remain subsections. Pure speed/
+navigation helpers moved only where declaration order was safe. React hook order and
+Reader/Pixi/worker algorithm order stayed intact.
+
+Fresh `check:code` passed with 42 production files, 23 type proofs and 23 boundary
+proofs; screen build and six focused schema/discovery checks passed. The isolated
+runtime proof `.runtime/modular-area-proof-1795510201467/result.json` rendered a new
+area with two self-registering children, proved the second child did not edit its
+parent, and reported no current Reader diagnostics. The later operator-authorized
+single full-suite attempt passed 46/47 unit tests, then identified a stale catalog
+ordering assumption in the test (not production discovery). Selecting `windowsBar`
+by identity made the targeted rerun pass. The remaining UI phase identified another
+stale global close-part selector because Setting Screen also has a close part; scoping
+it to `windowControls` made `shell-proof.mjs` pass at
+`.runtime/checks/window-controls/result.json`. The complete suite was not repeated.
+No Reader benchmark, dependency/native-runtime change, commit or push.
 
 ## Native window boundary
 
@@ -430,16 +488,35 @@ preserved zoom/speed and one GPU canvas. Popup screenshot inspected. No full sui
 or FPS benchmark. Existing reader-plan.md contains the requested tasklist; do not
 create a redundant standalone completed plan.
 
-### Setting Screen — 2026-11-23
+### Setting Screen and persistent Reader preferences — 2026-11-24
 
-Latest section-card addition: the popup body now renders JSON-declared section
-cards, following the TIMEMAXX Input reference pattern (header label + collapse
-chevron, then a body). One "Display" card ships as the first entry. Card chrome
-lives in WindowsAreaBtnSettingScreen.tsx (createSectionCards/SettingScreenSectionCard);
-appearance comes from JSON presets sectionCard/sectionCardHeader/sectionCardBody.
-Collapsed cards keep their body mounted (hidden, not unmounted) so later settings
-retain their state. Card width/label/order are per section in `sections`; card visuals
-are shared parts, not per-section copies.
+`screen/shared/components/SettingScreenSectionCard.tsx` is reusable collapsible card
+chrome. It receives its header label/initial expansion and shared visual parts; each
+locally discovered Setting Screen section imports it and supplies only its own body.
+Smooth scroll is currently the only visible `WindowsAreaBtnSettingScreenSection*.tsx`
+owner; the empty Display placeholder was removed. Adding another compatible section
+adds its module plus JSON declaration; the popup does not gain another handwritten
+section import. Collapsed bodies stay mounted (hidden, not unmounted).
+
+`screen/shared/components/ConfiguredValueSlider.tsx` owns the reusable controlled
+MUI Slider, ARIA value text, configured thumb/track geometry and value-label forwarding.
+Smooth scroll and Scroll speed import it. The shared slider contains no Reset,
+persistence, unit conversion or Reader behavior; those remain feature-owned.
+
+Smooth scroll owns Reset, a 100–2000 ms slider and live value. Config default is
+250 ms, matching the previous fixed coast scale. The setting changes the duration
+used to deliver preserved wheel distance; it does not replace the separate 150 ms
+tick-join window, speed multiplier, zoom, geometry, tile policy or uncapped maxFPS.
+BodyReader forwards accepted changes to the existing Pixi bridge/worker without
+rebuilding it. Active gesture rate/velocity rescale with duration while distance
+credit remains bounded.
+
+`electron/reader/ReaderPreferences.cts` discovers explicit numeric `preference`
+schemas in screen JSON. `%APPDATA%\Yuzread\reader-preferences.json` stores only
+validated overrides, never labels/defaults/ranges. Writes are serialized, coalesced
+and temp-file-renamed. Startup bootstrap resolves defaults plus overrides before the
+Reader worker starts. Reset removes the matching override. Invalid/unknown saved
+values fall back to config. Scroll speed now uses this same mechanism.
 
 Latest appearance correction: no visible "Setting Screen" title in the popup header;
 keep the screen's accessible name and right-side X. Header height is 28 px, with
@@ -447,30 +524,29 @@ panel paddingX=1.8/paddingY=1.5 (about 8/5 px at 440×320). No Setting Screen te
 were run for these operator-requested appearance changes.
 
 WindowsAreaBtnSettingScreen.tsx owns the far-left gear and persistent modeless popup.
-WindowsArea binds the child and forwards diagnostics only; no reader/native port or
-business controller was added. The settingScreen JSON child is at x=0.75%, with
+WindowsArea and Body only relay typed duration/state and preference capabilities;
+BodyReader remains the behavior owner. The settingScreen JSON child is at x=0.75%, with
 the existing speed/Load/default/Close placements unchanged. Shared ActionButton
 registers the MUI SettingsOutlined icon; there is no new dependency.
 
 One always-mounted Portal contains a draggable header, configured title/X row and
-an intentionally empty body. Outside click/Escape/top hover exit do not dismiss it.
+the discovered section cards. Outside click/Escape/top hover exit do not dismiss it.
 Gear opens/focuses; only X hides it. Hidden+inert remove the closed popup from focus/
 accessibility without destroying body nodes or session state. First opening anchors
 below the gear; later openings retain the dragged position. Resize clamps it to
 the viewport. Close/blur/unmount release pointer capture; close returns focus when
 the previous target is available. The close button never starts header/native drag.
-No file storage or persistence across app restarts. Future settings belong to this
-owner's BODY section; do not prepopulate unspecified settings or couple it to reader.
 
 Header/body/close parts, order/gap, sizing, icons/labels and visuals stay in JSON.
 The popup uses existing MUI Portal, ActionButton, ConfiguredRow and configuredSx;
 the reader, native window and speed panel are not recreated or retuned.
-check:code, screen build and four focused setting/config/placement tests passed.
-.runtime/setting-screen-1795427500334/result.json passed gear placement, actual
-header/X/empty-body UI, drag without moving the native window, header/outside/Escape
-survival, hidden inert nodes, retained position/body identity on reopening and
-unchanged reader geometry/renderer/native window count. Popup screenshot inspected.
-No full suite, benchmark, native/template/Chrome change or commit/push.
+Fresh check:code/build and focused schema, persistence, duration and speed checks
+passed. `.runtime/persistent-settings-1795517281962/result.json` verified shared slider
+use, config header
+labels, startup loading of saved 600 ms/3.7× values before worker creation, live
+100–2000 ms updates, override-only disk data and both Reset removals. The native unit
+recreated the store from disk and recovered configured defaults plus saved overrides.
+No full suite, benchmark, dependency/template/Chrome change or commit/push.
 
 ### Scroll-speed panel — 2026-11-23
 
@@ -479,7 +555,7 @@ clamp/step, Reset and pointer dragging. It uses existing MUI controls, Portal,
 ClickAwayListener, ActionButton and ConfiguredRow; no new dependency/native window.
 The readerScrollSpeed JSON child is at x=80.25%, left of Load. Existing Load/default/
 Close positions and the operator's D:\[ MANGA ]\Citadel folder remain unchanged.
-Defaults min=10/max=100/normal=10/step=1 map value/10 to 1×–10×, with 91 values.
+Preference min=10/max=100/default=10/step=1 maps value/10 to 1×–10×, with 91 values.
 Applied values stay clamped/snapped; the numeric draft is not forcibly rewritten
 mid-typing. Enter/blur commits it. Outside click/Escape closes without resetting.
 
@@ -496,7 +572,8 @@ unmount-on-pointer-exit, which destroys a child-owned popup. The transparent nat
 drag area remains mounted, and portal panels are outside the hidden wrapper.
 Popup pointer capture moves only the panel and cleans up on close/unmount. Its
 geometry/order/colors/labels come from JSON; no screen-local palette or draggable
-library. Runtime speed is session state, not automatically written to JSON/storage.
+library. Runtime speed is persisted as an override by ReaderPreferences; it is never
+written back into packaged screen JSON.
 
 Three focused schema/value/scaled-momentum tests and check:code passed (37 production
 files, 21 type/22 boundary fixtures). Screen build and the interaction check at
@@ -528,11 +605,11 @@ save, read-from-disk, disabling memory, fixed-folder override and cancellation.
 No full reader suite or performance benchmark was run for this small feature.
 
 Screen presentation, UI state and interaction coordination belong in `screen/`.
-Window command requests live with `screen/windows-area/`; native execution lives
+Window command requests live with `screen/reader/windows-area/`; native execution lives
 in `electron/`. No screen code imports native implementations directly.
 
 The body owns the reader. Keep reader display, state, loading/preloading
-coordination and scrolling together in `screen/body/reader/BodyReader.tsx`, using
+coordination and scrolling together in `screen/reader/body/reader/BodyReader.tsx`, using
 named sections. Its native counterpart is `electron/reader/CbzArchive.cts`.
 Open shows the first 3–5 decoded pages, then silently finishes the whole chapter.
 Speculative next prepares after current completion and publishes fully accepted
@@ -640,6 +717,7 @@ callbacks, errors or appends landing on another reading context. A failed next u
 the existing pointer-transparent status overlay; no new toolbar or blocking UI.
 
 Fresh focused evidence on 2026-11-22 (not a full suite/FPS/RSS benchmark):
+
 - `.runtime/reader-chapters-1795347611668/result.json`: authorized frozen order/caps,
   source-change and in-flight catalog retirement, early pages/current+next handoff,
   eviction/backward geometry and anchors at 100%/125% DPI, short visible chapters,
@@ -649,12 +727,12 @@ Fresh focused evidence on 2026-11-22 (not a full suite/FPS/RSS benchmark):
   source, budget and release-race regression passed.
 - Three focused phase-4/schema tests, build and final `npm run check:code` passed:
   32 production files, 15 type fixtures and 19 ownership/boundary fixtures.
-Some geometry/zoom/width-cache/Open-bar code is already present; inspect it before
-overwriting or treating it as a skeleton. Its presence is not fresh verification.
-Adopt Citadel's sizing/anchor/chapter-lifecycle concepts, not its code or all UI
-features. Do not start another implementation plan for already completed slices.
-Retain the correction: Citadel updates future render requests on resize
-and deliberately keeps existing surfaces; it does not reload all visible pages.
+  Some geometry/zoom/width-cache/Open-bar code is already present; inspect it before
+  overwriting or treating it as a skeleton. Its presence is not fresh verification.
+  Adopt Citadel's sizing/anchor/chapter-lifecycle concepts, not its code or all UI
+  features. Do not start another implementation plan for already completed slices.
+  Retain the correction: Citadel updates future render requests on resize
+  and deliberately keeps existing surfaces; it does not reload all visible pages.
 
 ### Scheduling and shared admission — phase 5 complete
 
@@ -711,6 +789,7 @@ catalogs and worker grants. Zoom is guarded by reading-context identity, allowin
 to remain usable while an offscreen-budget handoff displays only history spacers.
 
 Fresh focused evidence (no full suite, RSS sampling or FPS benchmark):
+
 - `.runtime/reader-scheduling-1795352726710/result.json`: actual shared 64-MB admission
   across catalogs, deferred next/readable current, safe budget handoff, tail-page
   priority and cached-next resume, early visible publication and replacement cleanup.
@@ -780,32 +859,34 @@ otherwise a test-created ERR_ABORTED can trigger an app startup-error dialog.
 
 Ownership chain: app → native window → Screen → named area parent → named children.
 The current structure specification is recorded in this file.
-Area parents are dumb assemblers: they import/bind direct children, place them,
-pass narrow inputs/callbacks, register/dispose connections and forward events.
+Area parents are dumb assemblers: they own relay ports, placement, subscriptions,
+connection cleanup and event forwarding. They do not import or list direct children.
 They never own button decisions, reader algorithms or child business state.
-Each child owns its own UI, behavior, state and config validation. Its filename
-starts with the owning parent's name. Shared/entry files are explicit exceptions.
+Each child exports a parent-local `defineChild` registration and owns its own UI,
+behavior, state and config validation. Its filename starts with the owning parent's
+name. Shared/entry/explicit owner-contract files are exceptions.
 No sibling/cross-area implementation imports, including type-only imports.
 Children communicate through parent-provided contracts, not globals or a broad
 AppSession/ScreenState/ShellHost object. Only the bootstrap boundary reads the
 bridge global. Shared modules never import feature/area implementations.
 
-Folders name owners (`windows-area`, `body/reader`); files name jobs
+Folders name owners (`reader/windows-area`, `reader/body/reader`); files name jobs
 (`WindowsAreaBtnLoad`, `BodyReader`, `CbzArchive`). Use PascalCase for owning UI and
 behavior modules; lowercase filenames for configuration/entry documents. Keep
 native source `.cts`, pure browser logic `.ts`, UI `.tsx`. Native source compiles
 to `.cjs` in `electron-built/`; it is never executed through a TypeScript loader.
 `ShellHost.d.ts` is the sole neutral, type-only native/screen wire contract.
 Types stay in their owning file's contract section. No redundant `src/`.
-Use CONFIG AND CONTRACT, LOGIC, UI AND LOCAL EVENTS, and LIFECYCLE sections as
-needed inside an owning file. Do not split every method/button into another file.
+Use CONFIG AND CONTRACT, CHILD REGISTRATION, LOGIC AND CALCULATIONS, STATE AND
+COORDINATION, UI AND LOCAL EVENTS, and LIFECYCLE AND CLEANUP sections as applicable.
+Do not create empty sections or split every method/button into another file.
 
-WindowsArea imports its prefixed children. The default-size/Close row is shared
-layout mechanics, not another feature controller. Adding a child touches its
-named file, its owning parent's local binding and JSON; existing siblings remain
-untouched. Adding an independent area needs only its folder/typed parent/children
-and config entry, not edits to a central area list, Screen or generic discovery.
-Local child assembly is intentional; application-wide manual area registries are not.
+WindowsArea discovers its prefixed, self-registering children. The default-size/Close
+row is shared layout mechanics, not another feature controller. Adding a compatible
+child touches its named file and JSON; its parent, central assembler and existing
+siblings remain untouched. Adding an independent area needs only its folder/typed
+parent/self-registering children and config entry, not edits to a central area list,
+Screen or generic discovery. Registrations are parent-local, never a singleton bus.
 
 The parent owns placement of sibling blocks; blocks never position siblings.
 Each block's `bounds` is relative to its area. Each internal row part's `size`
@@ -815,8 +896,10 @@ together. Shared ConfiguredRow renders order/sizing; the feature supplies behavi
 Keep configuration authority for all internal visuals, not only group appearance.
 
 Area roots export stable `areaId`, their declared parent name, and typed area binding.
-Only roots are globally discovered. Children export local identity/validation and
-typed props; parents bind their own children through the generic typed adapter.
+The generic build-time scope discovers roots and explicit `child` registrations.
+Children declare parent identity, local identity/validation, typed props and only
+their required named ports. Discovery derives the actual file path, groups children
+under the matching folder/parent and rejects duplicate/incompatible registrations.
 Accepted config and child inputs remain correlated in a closure, without casts.
 Disabled roots/children remain checked; invalid identities still conflict.
 Generic validation resolves all declared part visuals before calling the feature

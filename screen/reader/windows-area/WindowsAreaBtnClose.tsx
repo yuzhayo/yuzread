@@ -1,20 +1,24 @@
 import ActionButton, { hasActionIcon } from '@ui/ActionButton.tsx';
 import type { ActionIcon } from '@ui/ActionButton.tsx';
 import { errorText, oneOf } from '@logic/VisualConfig.ts';
+import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ChildProps, ConfigReport } from '@logic/AreaDiscovery.ts';
 import type { ResolvedConfig } from '@logic/ConfigValidation.ts';
 import type { DiagnosticIssue } from '@logic/Diagnostics.ts';
-import type { WindowActionResult, WindowOperation, WindowState } from '../../ShellHost.js';
+import { hasRequestPort, hasStatePort } from '@logic/ParentConnections.ts';
+import type { RequestPort, StatePort } from '@logic/ParentConnections.ts';
+import type { WindowActionResult, WindowOperation, WindowState } from '../../../ShellHost.js';
 
-export const componentId = 'window.defaultSize';
+// CONFIG AND CONTRACT — Close owns its action choice, label and icon validation.
+export const componentId = 'window.close';
 export const configKeys = ['icon', 'action', 'restoreLabel', 'restoredIcon'];
-export interface WindowsAreaDefaultConfig extends ResolvedConfig {
+export interface WindowsAreaCloseConfig extends ResolvedConfig {
   icon: ActionIcon;
   action: WindowOperation;
   restoreLabel: string;
   restoredIcon: ActionIcon;
 }
-export interface WindowsAreaDefaultInput {
+export interface WindowsAreaCloseInput {
   windowState: WindowState;
   requestAction(operation: WindowOperation): Promise<WindowActionResult>;
   report(issue: DiagnosticIssue): void;
@@ -22,7 +26,7 @@ export interface WindowsAreaDefaultInput {
 export function validateConfig(
   config: ResolvedConfig,
   report: ConfigReport,
-): config is WindowsAreaDefaultConfig {
+): config is WindowsAreaCloseConfig {
   const valid =
     hasActionIcon(config.icon) &&
     hasActionIcon(config.restoredIcon) &&
@@ -32,10 +36,33 @@ export function validateConfig(
   if (!valid) report('action', 'registered icons, window action and restore label', config);
   return valid;
 }
-export default function WindowsAreaBtnDefaultSize({
+
+// CHILD REGISTRATION — Close receives only native window action/state capabilities.
+interface WindowsAreaClosePorts {
+  action: RequestPort<WindowOperation, WindowActionResult>;
+  windowState: StatePort<WindowState>;
+}
+const acceptsParentPorts = (value: unknown): value is WindowsAreaClosePorts =>
+  hasRequestPort(value, 'action', 'native.window.input', 'native.window.output') &&
+  hasStatePort(value, 'windowState', 'native.window.state');
+export const child = defineChild(
+  'WindowsArea',
+  WindowsAreaBtnClose,
+  validateConfig,
+  { componentId, configKeys },
+  acceptsParentPorts,
+  (ports, report) => ({
+    windowState: ports.windowState.getSnapshot(),
+    requestAction: ports.action.request,
+    report,
+  }),
+);
+
+// UI AND LOCAL EVENTS — invoke the configured action without owning native policy.
+export default function WindowsAreaBtnClose({
   config,
   input,
-}: ChildProps<WindowsAreaDefaultConfig, WindowsAreaDefaultInput>) {
+}: ChildProps<WindowsAreaCloseConfig, WindowsAreaCloseInput>) {
   const restored = config.action === 'toggleMaximize' && input.windowState.maximized;
   const activate = async () => {
     try {

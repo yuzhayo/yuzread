@@ -20,16 +20,27 @@ export type ConfigValidator<C extends ResolvedConfig> = (
 ) => config is C;
 export interface ChildMetadata {
   componentId: string;
-  fileName: string;
   configKeys?: readonly string[];
   partKeys?: readonly string[];
 }
 export interface ChildDefinition<P> extends ChildMetadata {
+  fileName: string;
   bind(
     config: ResolvedConfig,
     report: ConfigReport,
     issues: IssueReport,
   ): ((ports: P) => ReactNode) | null;
+}
+export interface ChildRegistration extends ChildMetadata {
+  parentName: string;
+  bind(
+    config: ResolvedConfig,
+    report: ConfigReport,
+    issues: IssueReport,
+  ): ((ports: unknown) => ReactNode) | null;
+}
+export interface DiscoveredChild extends ChildRegistration {
+  fileName: string;
 }
 export interface AreaProps<P> {
   config: ResolvedArea & { nodes: AcceptedNode<P>[] };
@@ -44,7 +55,12 @@ export interface AreaModule {
   areaId: string;
   parentName: string;
   default: unknown;
-  bind(area: ResolvedArea, presets: unknown, diagnostics: Diagnostics): BoundArea;
+  bind(
+    area: ResolvedArea,
+    presets: unknown,
+    diagnostics: Diagnostics,
+    children: DiscoveredChild[],
+  ): BoundArea;
 }
 export interface AreaCatalogEntry {
   areaId: string;
@@ -52,16 +68,19 @@ export interface AreaCatalogEntry {
   filePath: string;
   folder: string;
   valid: boolean;
-  bind: AreaModule['bind'] | null;
+  bind: ((area: ResolvedArea, presets: unknown, diagnostics: Diagnostics) => BoundArea) | null;
 }
 
-export function bindChild<C extends ResolvedConfig, I, P>(
+export function defineChild<C extends ResolvedConfig, I, P>(
+  parentName: string,
   Component: ComponentType<ChildProps<C, I>>,
   validate: ConfigValidator<C>,
   metadata: ChildMetadata,
+  acceptPorts: (value: unknown) => value is P,
   inputs: (ports: P, report: IssueReport) => I,
-): ChildDefinition<P> {
+): ChildRegistration {
   return {
+    parentName,
     ...metadata,
     bind(config, report, issues) {
       if (!validate(config, report)) return null;
@@ -74,17 +93,36 @@ export function bindChild<C extends ResolvedConfig, I, P>(
           filePath: config.filePath,
           configPath: config.configPath,
         });
-      return (ports) => createElement(Component, { config, input: inputs(ports, childReport) });
+      return (ports) => {
+        if (!acceptPorts(ports)) {
+          childReport({
+            code: 'CHILD_PORT_MISMATCH',
+            expected: `compatible ${parentName} ports`,
+            actual: config.componentId,
+          });
+          return null;
+        }
+        return createElement(Component, { config, input: inputs(ports, childReport) });
+      };
     },
   };
 }
 export function bindArea<P extends Record<string, ParentPort>>(
   Component: ComponentType<AreaProps<P>>,
-  children: ChildDefinition<P>[],
   createPorts: () => P,
 ): AreaModule['bind'] {
-  return (area, presets, diagnostics) => {
+  return (area, presets, diagnostics, discovered) => {
     const ports = createPorts();
+    const children: ChildDefinition<P>[] = discovered.map((registration) => ({
+      componentId: registration.componentId,
+      fileName: registration.fileName,
+      ...(registration.configKeys ? { configKeys: registration.configKeys } : {}),
+      ...(registration.partKeys ? { partKeys: registration.partKeys } : {}),
+      bind(config, report, issues) {
+        const render = registration.bind(config, report, issues);
+        return render ? (parentPorts: P) => render(parentPorts) : null;
+      },
+    }));
     const nodes = resolveChildren(area.children, children, area, presets, diagnostics);
     const binding = parentBinding(ports);
     return {
@@ -114,62 +152,124 @@ function validModule(value: unknown): value is AreaModule {
     typeof value.bind === 'function'
   );
 }
+function validChild(value: unknown): value is ChildRegistration {
+  return (
+    isObject(value) &&
+    /^[A-Z][A-Za-z0-9]*$/.test(String(value.parentName)) &&
+    isId(value.componentId) &&
+    (value.configKeys === undefined ||
+      (Array.isArray(value.configKeys) &&
+        value.configKeys.every((key) => typeof key === 'string'))) &&
+    (value.partKeys === undefined ||
+      (Array.isArray(value.partKeys) && value.partKeys.every((key) => typeof key === 'string'))) &&
+    typeof value.bind === 'function'
+  );
+}
 export async function discoverAreas(
   loaders: Record<string, () => Promise<unknown>>,
   diagnostics: Diagnostics,
 ): Promise<AreaCatalogEntry[]> {
-  const entries = await Promise.all(
-    Object.entries(loaders).map(async ([source, load]): Promise<AreaCatalogEntry | null> => {
+  const modules = await Promise.all(
+    Object.entries(loaders).map(async ([source, load]) => {
       const filePath = source.replace(/^\.\//, ''),
         folder = filePath.slice(0, filePath.lastIndexOf('/'));
       try {
         const module = await load();
-        if (!isObject(module) || module.areaId === undefined) return null;
-        if (!isId(module.areaId)) {
-          diagnostics.report({
-            code: 'INVALID_AREA_ID',
-            filePath,
-            expected: 'stable area ID',
-            actual: module.areaId,
-          });
-          return null;
-        }
-        if (!validModule(module) || filePath.split('/').at(-1) !== `${module.parentName}.tsx`) {
-          diagnostics.report({
-            code: 'INVALID_AREA_EXPORT',
-            filePath,
-            expected: 'named typed area root',
-            actual: module.areaId,
-          });
-          return {
-            areaId: module.areaId,
-            parentName: typeof module.parentName === 'string' ? module.parentName : '',
-            filePath,
-            folder,
-            valid: false,
-            bind: null,
-          };
-        }
-        return {
-          areaId: module.areaId,
-          parentName: module.parentName,
-          filePath,
-          folder,
-          valid: true,
-          bind: module.bind,
-        };
+        return { filePath, folder, module };
       } catch (error) {
         diagnostics.report({
           code: 'AREA_LOAD_FAILED',
           filePath,
-          expected: 'loadable area root',
+          expected: 'loadable screen module',
           actual: errorText(error),
         });
         return null;
       }
     }),
   );
-  return entries
-    .filter((entry): entry is AreaCatalogEntry => entry !== null)
-    .sort((a, b) => a.filePath.localeCompare(b.filePath));
+  const loaded = modules.filter(
+    (entry): entry is { filePath: string; folder: string; module: unknown } => entry !== null,
+  );
+  const registrations: { filePath: string; folder: string; child: ChildRegistration }[] = [];
+  for (const entry of loaded)
+    if (isObject(entry.module) && entry.module.child !== undefined) {
+      if (validChild(entry.module.child))
+        registrations.push({ ...entry, child: entry.module.child });
+      else
+        diagnostics.report({
+          code: 'INVALID_CHILD_EXPORT',
+          filePath: entry.filePath,
+          expected: 'named parent-local child registration',
+          actual: entry.module.child,
+        });
+    }
+  const claimed = new Set<string>();
+  const entries: AreaCatalogEntry[] = [];
+  for (const entry of loaded) {
+    const module = entry.module;
+    if (!isObject(module) || module.areaId === undefined) continue;
+    if (!isId(module.areaId)) {
+      diagnostics.report({
+        code: 'INVALID_AREA_ID',
+        filePath: entry.filePath,
+        expected: 'stable area ID',
+        actual: module.areaId,
+      });
+      continue;
+    }
+    if (!validModule(module) || entry.filePath.split('/').at(-1) !== `${module.parentName}.tsx`) {
+      diagnostics.report({
+        code: 'INVALID_AREA_EXPORT',
+        filePath: entry.filePath,
+        expected: 'named typed area root',
+        actual: module.areaId,
+      });
+      entries.push({
+        areaId: module.areaId,
+        parentName: typeof module.parentName === 'string' ? module.parentName : '',
+        filePath: entry.filePath,
+        folder: entry.folder,
+        valid: false,
+        bind: null,
+      });
+      continue;
+    }
+    const children: DiscoveredChild[] = [];
+    for (const registration of registrations) {
+      const inside =
+        registration.filePath.startsWith(`${entry.folder}/`) &&
+        registration.child.parentName === module.parentName;
+      if (!inside) continue;
+      const fileName = registration.filePath.slice(entry.folder.length + 1);
+      if (!fileName.split('/').at(-1)?.startsWith(module.parentName) || fileName.includes('../')) {
+        diagnostics.report({
+          code: 'CHILD_NAME_MISMATCH',
+          filePath: registration.filePath,
+          expected: module.parentName,
+          actual: fileName,
+        });
+        continue;
+      }
+      claimed.add(registration.filePath);
+      children.push({ ...registration.child, fileName });
+    }
+    children.sort((a, b) => a.fileName.localeCompare(b.fileName));
+    entries.push({
+      areaId: module.areaId,
+      parentName: module.parentName,
+      filePath: entry.filePath,
+      folder: entry.folder,
+      valid: true,
+      bind: (area, presets, sink) => module.bind(area, presets, sink, children),
+    });
+  }
+  for (const registration of registrations)
+    if (!claimed.has(registration.filePath))
+      diagnostics.report({
+        code: 'CHILD_OWNER_UNAVAILABLE',
+        filePath: registration.filePath,
+        expected: registration.child.parentName,
+        actual: registration.folder,
+      });
+  return entries.sort((a, b) => a.filePath.localeCompare(b.filePath));
 }

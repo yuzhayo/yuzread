@@ -1,37 +1,44 @@
-import { AreaChildren } from '@ui/AreaLayout.tsx';
-import { bindArea, bindChild } from '@logic/AreaDiscovery.ts';
-import type { AreaProps } from '@logic/AreaDiscovery.ts';
 import { contract, createRequest, createState } from '@logic/ParentConnections.ts';
 import { isObject, oneOf } from '@logic/VisualConfig.ts';
+import type { ActionSource } from '@logic/Diagnostics.ts';
 import type {
-  ReaderOpenOptions,
-  ReaderOpenResult,
-  ReaderPrepareResult,
-  ReaderPrepareRequest,
-  ReaderChapterRequest,
-  ReaderChapterResult,
-  ReaderCatalog,
   Chapter,
-  Result,
+  Failure,
   PageMetadata,
   ReaderBudget,
-  ReaderWorkPriority,
-  ReaderMetricEvent,
-  ReaderNavigationState,
-  ReaderNavigationRequest,
+  ReaderCatalog,
+  ReaderChapterRequest,
+  ReaderChapterResult,
   ReaderDropRequest,
-} from '../../ShellHost.js';
-import BodyReader, {
-  componentId,
-  configKeys,
-  partKeys,
-  validateConfig,
-} from './reader/BodyReader.tsx';
-import type { ScreenOpenResult, ReaderState, ReaderOpenIntent } from './reader/BodyReader.tsx';
+  ReaderMetricEvent,
+  ReaderNavigationRequest,
+  ReaderNavigationState,
+  ReaderNumberSettingChange,
+  ReaderOpenOptions,
+  ReaderOpenResult,
+  ReaderPickerSettings,
+  ReaderPrepareRequest,
+  ReaderPrepareResult,
+  ReaderRenderReserveRequest,
+  ReaderPreferenceSnapshot,
+  ReaderPreferenceUpdate,
+  ReaderWorkPriority,
+  Result,
+} from '../../../ShellHost.js';
 
-// CONFIG AND CONTRACT — the parent validates connection shapes, not reader algorithms.
-export const areaId = 'body';
-export const parentName = 'Body';
+// CONFIG AND CONTRACT — Body's public relay ports; no reader rendering or scheduling policy.
+export type ReaderPhase = '' | 'scanning' | 'preparing';
+export interface ReaderState {
+  readonly phase: ReaderPhase;
+  readonly total: number;
+}
+export type ScreenOpenResult =
+  | { ok: true; canceled: true }
+  | { ok: true; chapter: { id: string; pages: number } }
+  | Failure
+  | undefined;
+export type ReaderOpenIntent = ActionSource & { picker?: ReaderPickerSettings };
+
 const integer = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
 const count = (v: unknown): v is number =>
   typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
@@ -166,9 +173,30 @@ const preparedTiles = (v: unknown) =>
         typeof tile.url === 'string',
     ));
 const result = (v: unknown): v is Result =>
-  // Result and tile codecs validate only serialized shape, never reader policy.
   isObject(v) && (v.ok === true || (v.ok === false && typeof v.error === 'string'));
-const createPorts = () => ({
+const settingChange = (
+  value: unknown,
+  minimum: number,
+  maximum: number,
+): value is ReaderNumberSettingChange =>
+  isObject(value) &&
+  typeof value.value === 'number' &&
+  Number.isFinite(value.value) &&
+  value.value >= minimum &&
+  value.value <= maximum &&
+  (value.reset === undefined || typeof value.reset === 'boolean');
+const preferences = (value: unknown): value is ReaderPreferenceSnapshot | null =>
+  value === null ||
+  (isObject(value) &&
+    value.version === 1 &&
+    isObject(value.values) &&
+    Object.keys(value.values).length <= 64 &&
+    Object.entries(value.values).every(
+      ([id, item]) =>
+        /^[a-z][A-Za-z0-9]{0,63}$/.test(id) && typeof item === 'number' && Number.isFinite(item),
+    ));
+
+export const createBodyPorts = () => ({
   navigateChapter: createRequest(
     contract(
       'ui.reader.navigation.input',
@@ -200,10 +228,8 @@ const createPorts = () => ({
     { catalogId: '', currentId: '', chapters: [], busy: false },
   ),
   setScrollSpeed: createRequest(
-    contract(
-      'ui.reader.speed.input',
-      (v: unknown): v is number =>
-        typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 10,
+    contract('ui.reader.speed.input', (v: unknown): v is ReaderNumberSettingChange =>
+      settingChange(v, 1, 100),
     ),
     contract('ui.reader.speed.output', result),
     { ok: false, error: 'Reader speed is unavailable' },
@@ -211,10 +237,38 @@ const createPorts = () => ({
   scrollSpeed: createState(
     contract(
       'ui.reader.speed.state',
-      (v: unknown): v is number =>
-        typeof v === 'number' && Number.isFinite(v) && v >= 0.1 && v <= 10,
+      (v: unknown): v is number | null =>
+        v === null || (typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= 100),
     ),
-    1,
+    null,
+  ),
+  setSmoothScrollDuration: createRequest(
+    contract('ui.reader.smooth-duration.input', (v: unknown): v is ReaderNumberSettingChange =>
+      settingChange(v, 100, 2000),
+    ),
+    contract('ui.reader.smooth-duration.output', result),
+    { ok: false, error: 'Reader smooth-scroll duration is unavailable' },
+  ),
+  smoothScrollDuration: createState(
+    contract(
+      'ui.reader.smooth-duration.state',
+      (v: unknown): v is number | null =>
+        v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 100 && v <= 2000),
+    ),
+    null,
+  ),
+  readerPreferences: createState(contract('native.reader.preferences.state', preferences), null),
+  saveReaderPreference: createRequest(
+    contract(
+      'native.reader.preference.input',
+      (v: unknown): v is ReaderPreferenceUpdate =>
+        isObject(v) &&
+        typeof v.id === 'string' &&
+        /^[a-z][A-Za-z0-9]{0,63}$/.test(v.id) &&
+        (v.value === null || (typeof v.value === 'number' && Number.isFinite(v.value))),
+    ),
+    contract('native.result', result),
+    { ok: false, error: 'Reader preference storage is unavailable' },
   ),
   open: createRequest(
     contract(
@@ -324,7 +378,7 @@ const createPorts = () => ({
   renderReserve: createRequest(
     contract(
       'native.reader.render-reserve.input',
-      (v: unknown): v is import('../../ShellHost.js').ReaderRenderReserveRequest =>
+      (v: unknown): v is ReaderRenderReserveRequest =>
         Array.isArray(v) &&
         v.length === 3 &&
         typeof v[0] === 'string' &&
@@ -342,30 +396,5 @@ const createPorts = () => ({
     { ok: false, error: 'Capability is unavailable' },
   ),
 });
-type Ports = ReturnType<typeof createPorts>;
-const children = [
-  bindChild(
-    BodyReader,
-    validateConfig,
-    { componentId, fileName: 'reader/BodyReader.tsx', configKeys, partKeys },
-    (ports: Ports) => ({
-      openArchive: ports.archiveOpen.request,
-      openDroppedArchive: ports.dropOpen.request,
-      openChapter: ports.chapterOpen.request,
-      preparePage: ports.prepare.request,
-      releaseChapter: ports.release.request,
-      registerOpenRequest: ports.open.register,
-      publishState: ports.readerState.publish,
-      submitReaderMetrics: ports.readerMetrics.request,
-      reserveRender: ports.renderReserve.request,
-      registerScrollSpeed: ports.setScrollSpeed.register,
-      publishScrollSpeed: ports.scrollSpeed.publish,
-      registerNavigation: ports.navigateChapter.register,
-      publishNavigation: ports.navigation.publish,
-    }),
-  ),
-];
-export default function Body({ config, ports, report }: AreaProps<Ports>) {
-  return <AreaChildren nodes={config.nodes} ports={ports} report={report} />;
-}
-export const bind = bindArea(Body, children, createPorts);
+
+export type BodyPorts = ReturnType<typeof createBodyPorts>;

@@ -21,6 +21,26 @@ export interface ReaderMetricEvent {
   values: Record<string, ReaderMetricValue>;
 }
 export type Result = { ok: true } | Failure;
+export interface NumberPreferenceDefinition {
+  id: string;
+  kind: 'number';
+  default: number;
+  min: number;
+  max: number;
+  step: number;
+}
+export interface ReaderPreferenceSnapshot {
+  version: 1;
+  values: Record<string, number>;
+}
+export interface ReaderPreferenceUpdate {
+  id: string;
+  value: number | null;
+}
+export interface ReaderNumberSettingChange {
+  value: number;
+  reset?: boolean;
+}
 export interface WindowState {
   maximized: boolean;
   minimized: boolean;
@@ -137,6 +157,7 @@ export interface DiagnosticRecord {
 }
 export interface BootstrapData {
   config: unknown;
+  readerPreferences: ReaderPreferenceSnapshot;
   windowState: WindowState;
   hoveredSections: string[];
   logPath: string;
@@ -160,6 +181,7 @@ export interface InvokeChannels {
   'reader:release': { args: [id: string]; result: Result };
   'reader:diagnostics': { args: [events: ReaderMetricEvent[]]; result: Result };
   'reader:render-reserve': { args: ReaderRenderReserveRequest; result: Result };
+  'reader:preference': { args: [update: ReaderPreferenceUpdate]; result: Result };
 }
 export interface EventChannels {
   'shell:window-state': WindowState;
@@ -185,5 +207,6 @@ export interface ShellHost {
     release(id: string): Promise<Result>;
     diagnostics(events: ReaderMetricEvent[]): Promise<Result>;
     reserveRender(...request: ReaderRenderReserveRequest): Promise<Result>;
+    setPreference(update: ReaderPreferenceUpdate): Promise<Result>;
   };
 }

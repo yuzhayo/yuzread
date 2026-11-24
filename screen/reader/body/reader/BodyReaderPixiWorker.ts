@@ -8,7 +8,7 @@ import {
   WebGLRenderer,
   WebWorkerAdapter,
 } from 'pixi.js';
-import type { ReaderPreparedPage, ReaderPreparedTile, Result } from '../../../ShellHost.js';
+import type { ReaderPreparedPage, ReaderPreparedTile, Result } from '../../../../ShellHost.js';
 import type {
   PixiInput,
   PixiOutput,
@@ -20,6 +20,7 @@ import {
   appendWheelTick,
   createWheelGesture,
   scaleWheelGesture,
+  scaleWheelDuration,
   advanceRenderDeadline,
   tileInViewport,
   tileWorkNeeded,
@@ -27,6 +28,8 @@ import {
 
 // CONFIG AND CONTRACT — a reader-owned worker, not DOM/Node/IPC code.
 const MB = 1048576;
+
+// LOGIC AND CALCULATIONS — validate every message/page before it can affect worker state.
 const record = (v: unknown): v is Record<string, unknown> =>
   typeof v === 'object' && v !== null && !Array.isArray(v);
 const finite = (v: unknown, min = -1e9, max = 1e9): v is number =>
@@ -133,7 +136,9 @@ function validInput(v: unknown): v is PixiInput {
         Number.isInteger(v.maxFPS) &&
         finite(v.tileMemoryMB, 16, 512) &&
         finite(v.tickWindowMs, 50, 300) &&
-        Number.isInteger(v.tickWindowMs)
+        Number.isInteger(v.tickWindowMs) &&
+        finite(v.smoothDurationMs, 100, 2000) &&
+        Number.isInteger(v.smoothDurationMs)
       );
     case 'layout':
       return (
@@ -167,6 +172,13 @@ function validInput(v: unknown): v is PixiInput {
       return integer(v.control) && finite(v.delta) && finite(v.maxY, 0);
     case 'speed':
       return integer(v.control) && finite(v.speed, 0.1, 10) && finite(v.maxY, 0);
+    case 'smooth-duration':
+      return (
+        integer(v.control) &&
+        finite(v.durationMs, 100, 2000) &&
+        Number.isInteger(v.durationMs) &&
+        finite(v.maxY, 0)
+      );
     case 'ack':
       return integer(v.serial);
     case 'reservation':
@@ -194,7 +206,8 @@ const reply = (value: PixiOutput) => self.postMessage(value);
 const pageKey = (p: ReaderPreparedPage) =>
   p.tiles ? `${p.catalogId}:${p.entryId}:${p.index}` : `${p.id}:${p.index}`;
 
-// RESOURCES — bitmaps/textures are the accepted page surfaces, never duplicate DOM images.
+// STATE AND COORDINATION — RESOURCES
+// Bitmaps/textures are accepted page surfaces, never duplicate DOM images.
 interface Page {
   chapter: string;
   source: ReaderPreparedPage;
@@ -349,13 +362,15 @@ function releasePages() {
   }
 }
 
-// MOMENTUM — one worker frame loop; a single outstanding position prevents a mailbox backlog.
+// STATE AND COORDINATION — MOMENTUM
+// One worker frame loop; a single outstanding position prevents a mailbox backlog.
 let y = 0,
   maxY = 0,
   velocity = 0,
   control = 0;
 let gesture = createWheelGesture(),
-  tickWindowMs = 150;
+  tickWindowMs = 150,
+  smoothDurationMs = 0;
 let frame: number | null = null,
   lastTime: number | null = null,
   serial = 0,
@@ -445,6 +460,7 @@ function tick(time: number) {
       performance.timeOrigin + performance.now(),
       speed,
       tickWindowMs,
+      smoothDurationMs,
     );
     const desired = y + next.distance;
     let nextY = Math.max(0, Math.min(maxY, desired));
@@ -565,7 +581,8 @@ function stop(offset: number) {
   schedule();
 }
 
-// TILE RESIDENCY — source files stay on disk; only visible/nearby decoded surfaces stay live.
+// STATE AND COORDINATION — TILE RESIDENCY
+// Source files stay on disk; only visible/nearby decoded surfaces stay live.
 function evictTile(tile: CachedTile, keepTexture = false): Texture | null {
   if (!tile.sprite) return null;
   const retained = keepTexture ? tile.texture : null;
@@ -962,7 +979,8 @@ async function prepareCached(message: Extract<PixiInput, { kind: 'prepare' }>) {
   return { bitmapMs: 0, uploadMs: 0 };
 }
 
-// GPU PREPARATION — one priority/FIFO page at a time; legacy whole-PNG upload remains tile-bounded.
+// STATE AND COORDINATION — GPU PREPARATION
+// One priority/FIFO page at a time; legacy whole-PNG upload remains tile-bounded.
 const jobs: Extract<PixiInput, { kind: 'prepare' }>[] = [];
 let preparing = false;
 const cancelled = new Set<string>();
@@ -1172,6 +1190,7 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   maxFPS = message.maxFPS;
   tileLimit = message.tileMemoryMB * MB;
   tickWindowMs = message.tickWindowMs;
+  smoothDurationMs = message.smoothDurationMs;
   y = view.y;
   maxY = view.maxY;
   control = view.control;
@@ -1207,7 +1226,7 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   schedule();
 }
 
-// LIFECYCLE — dispose settles pending work before acknowledging owned resources.
+// LIFECYCLE AND CLEANUP — dispose settles pending work before acknowledging resources.
 let pumpingTask: Promise<void> = Promise.resolve();
 async function dispose() {
   disposed = true;
@@ -1239,6 +1258,8 @@ async function dispose() {
   reply({ version: 1, kind: 'disposed' });
   self.close();
 }
+// STATE AND COORDINATION — MESSAGE DISPATCH
+// One validated mailbox owns initialization, layout, input, preparation and release.
 self.addEventListener('message', (event: MessageEvent<unknown>) => {
   if (!validInput(event.data)) {
     reply({ version: 1, kind: 'failed', error: 'Invalid renderer message' });
@@ -1350,14 +1371,27 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
     if (message.kind === 'wheel') {
       for (const page of pages.values())
         if (page.cache) for (const tile of page.cache) tile.failed = false;
-      gesture = appendWheelTick(gesture, message.distance, message.time, speed, tickWindowMs);
+      gesture = appendWheelTick(
+        gesture,
+        message.distance,
+        message.time,
+        speed,
+        tickWindowMs,
+        smoothDurationMs,
+      );
       velocity = gesture.velocity;
       lastTime ??= performance.now();
       schedule();
     } else if (message.kind === 'speed') {
       const factor = message.speed / speed;
       speed = message.speed;
-      gesture = scaleWheelGesture(gesture, factor, speed);
+      gesture = scaleWheelGesture(gesture, factor, speed, smoothDurationMs);
+      velocity = gesture.velocity;
+      positionDirty = true;
+      schedule();
+    } else if (message.kind === 'smooth-duration') {
+      gesture = scaleWheelDuration(gesture, smoothDurationMs, message.durationMs, speed);
+      smoothDurationMs = message.durationMs;
       velocity = gesture.velocity;
       positionDirty = true;
       schedule();

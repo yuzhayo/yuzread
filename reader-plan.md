@@ -2,6 +2,152 @@
 
 Status: **Ceiling disabled for operator feel comparison; bounded tile/raster optimizations retained. Functional checks pass; feel/presentation acceptance pending.**
 
+## Delivered structural migration — three sibling applications (2026-11-24)
+
+The operator authorized reorganizing the current Reader now, before separate agents
+build Library and Downloader. This migration establishes visible application owners
+and parent-local automatic child registration; it does not implement Library catalog
+behavior or Downloader acquisition behavior.
+
+```text
+electron/                         Native Electron/Windows boundary shared by the suite
+  reader/                         Reader-native archive/open services
+  library/                        Reserved owner for future Library-native services
+  downloader/                     Reserved owner for future Downloader-native services
+screen/                           Browser/UI boundary
+  shared/                         Reusable UI and non-feature mechanics only
+  reader/                         Complete current Reader application
+    windows-area/                 Reader top controls
+    body/                         Reader body and GPU reader
+    bottom-bar/                   Reader chapter navigation
+    action-bar/                   Retained disabled Reader area
+  library/                        Future standalone Library application owner
+  downloader/                     Future standalone Downloader application owner
+```
+
+Connection direction remains:
+
+```text
+Downloader --completed filesystem delivery--> Library
+Library --external CBZ open request----------> Reader
+Library --configured fallback----------------> Windows CBZ opener
+```
+
+Reader, Library and Downloader remain separate screens, logic, processes, identities,
+userData and state. Shared code provides mechanics/contracts only. A sibling app may
+not import another app's implementation.
+
+### One-file-at-a-time migration order
+
+- [x] Extend shared discovery/connection mechanics for explicit child self-registration.
+- [x] Move each Reader area/child file under `screen/reader/`, one file at a time,
+      fixing its own imports and internal responsibility sections before moving the next.
+- [x] Remove handwritten child imports/lists from each parent after all of that
+      parent's children self-register.
+- [x] Update Reader area folder paths in `screen/config.json`; preserve IDs,
+      geometry, appearance, connections and behavior.
+- [x] Add only durable Library/Downloader ownership folders and connection map;
+      leave their business UI and logic to the separately assigned agent.
+- [x] Update structural checks and the isolated modular proof so adding/removing a
+      compatible child does not edit its parent, central assembler or siblings.
+- [x] Update README/AGENTS ownership maps and remove obsolete migration rules.
+- [x] Run `check:code`, screen build and focused discovery/runtime checks only;
+      no Setting Screen test, full suite, commit or push.
+
+Files are copied/moved, not rewritten from memory. Existing Reader behavior, JSON
+values, native contracts, Pixi worker boundaries and generated outputs remain intact.
+At each step, the old and new path must not both remain as competing implementations.
+
+Delivered evidence: `npm run check:code` passed with 42 production files, 23 type
+proofs and 23 boundary proofs; the screen build and six focused schema/discovery
+checks passed. `.runtime/modular-area-proof-1795508254867/result.json` passed an
+isolated new area with two self-registering children, confirmed the second child did
+not edit its parent, rendered current Reader areas without diagnostics and left
+main/Screen/discovery assemblers unchanged. No Setting Screen test, full suite,
+Reader performance benchmark, dependency, native runtime, commit or push was used.
+
+### Canonical internal sectioning follow-up
+
+Specialized names remain useful only as subsections beneath the global canonical
+responsibilities. Normalize one owning file at a time, preserving execution order,
+React hook rules and existing behavior:
+
+- [x] `BodyReader.tsx`: contract/registration, calculations, state/coordination,
+      local events/UI and lifecycle/cleanup; retain PREPARATION/ZOOM/SCROLLBAR/DIAGNOSTICS.
+- [x] `BodyReaderPixi.ts`: contract, validation calculations, bridge state,
+      browser/worker events and cleanup.
+- [x] `BodyReaderPixiWorker.ts`: contract, calculations, worker state/resources,
+      message coordination and disposal; retain RESOURCES/MOMENTUM/TILES/GPU subsections.
+- [x] `WindowsAreaBtnSettingScreen.tsx`: config/registration, calculations,
+      component state/events, card UI and cleanup.
+- [x] `WindowsAreaBtnScrollSpeed.tsx`: config/registration, value calculations,
+      component state/events, panel UI and cleanup.
+- [x] `BottomBarChapterNavigation.tsx`: config/registration, derived calculations,
+      popup state/events, UI and cleanup.
+- [x] Run `check:code`, screen build and focused Reader structural/runtime proof only;
+      no Setting Screen test or full suite.
+
+Sectioning result: all six owners now use canonical CONFIG AND CONTRACT, CHILD
+REGISTRATION, LOGIC AND CALCULATIONS, STATE AND COORDINATION, UI AND LOCAL EVENTS,
+and LIFECYCLE AND CLEANUP boundaries where applicable. Specialized Reader headings
+remain nested descriptions. Pure speed/navigation helpers moved behind registration;
+React hook order and Reader/Pixi/worker algorithm order were preserved. Typecheck
+passed after each file. Final `check:code`, screen build and the focused runtime proof
+passed at `.runtime/modular-area-proof-1795510201467/result.json`. The initial slice
+used no Setting Screen test/full suite. The operator then authorized one project-wide
+`npm run check`: 46/47 unit tests passed and exposed one stale test assumption that
+`catalog[0]` was WindowsArea after deterministic path sorting. The test now selects
+the `windowsBar` identity and its targeted rerun passed. The remaining UI phase then
+exposed an unscoped `[data-part="close"]` selector shared by window controls and the
+Setting Screen; scoping it to `windowControls` made `shell-proof.mjs` pass with evidence
+at `.runtime/checks/window-controls/result.json`. The complete command was not repeated;
+no benchmark, commit or push.
+
+### Shared setting cards and persistent Reader controls
+
+The Setting Screen card becomes shared UI chrome. Each locally discovered section
+owns its body controls and reads its header/default/range from `screen/config.json`.
+Native persistence stores only validated user overrides in the Reader userData folder;
+Reset removes an override so the configured default remains authoritative.
+
+- [x] Move collapsible card chrome to `screen/shared/components/`; remove the empty
+      Display placeholder after Smooth scroll becomes the first useful section.
+- [x] Add the Smooth scroll section with Reset, a 100–2000 ms slider and configured
+      250 ms default; keep wheel distance, tick joining, speed and uncapped pacing separate.
+- [x] Pass smooth duration through WindowsArea → BodyReader → Pixi bridge/worker and
+      preserve current 250 ms behavior at the default.
+- [x] Add a generic native Reader preference store with config-declared numeric schemas,
+      atomic/coalesced writes and startup bootstrap values.
+- [x] Persist Smooth scroll and Scroll speed changes; apply startup values before the
+      rendering worker starts and remove their override on Reset.
+- [x] Run `check:code`, the screen build and focused preference/setting/momentum checks;
+      do not repeat the full suite.
+
+Delivered result: shared card chrome lives in `SettingScreenSectionCard.tsx`; Smooth
+scroll is the only visible locally discovered section owner. Numeric preference schemas in
+screen JSON drive validation/defaults, while `ReaderPreferences.cts` stores only atomic,
+coalesced overrides in Reader userData. Smooth duration and Scroll speed load before the
+worker, update it live and delete their override on Reset. `check:code`, both builds,
+11 focused schema/persistence/momentum/speed checks and the UI/native proof passed.
+`.runtime/persistent-settings-1795517281962/result.json` verified saved 600 ms/3.7×
+startup, JSON card labels, live 100–2000 ms behavior and both Reset removals. The full
+suite, benchmark, dependency changes, commit and push were not used.
+
+#### Shared slider follow-up
+
+- [x] Extract the repeated MUI Slider rendering, accessibility and configured
+      thumb/track geometry into `screen/shared/components/ConfiguredValueSlider.tsx`.
+- [x] Make Scroll Speed and Smooth scroll import the shared slider while retaining
+      their own values, Reset behavior, persistence and Reader operations.
+- [x] Run `check:code`, screen build and the focused setting/persistence checks only.
+
+Follow-up result: `ConfiguredValueSlider.tsx` now owns the controlled MUI Slider,
+ARIA value text, configured thumb/track geometry and value-label forwarding. Scroll
+Speed and Smooth scroll import it while retaining their separate state, units, Reset,
+persistence and Reader commands. `check:code`, screen build, seven focused unit checks
+and `.runtime/persistent-settings-1795517281962/result.json` passed; the runtime proof
+confirmed both controls render the shared slider. No full suite, commit or push.
+
 The operator requested this plan on 2026-11-22, then approved implementation without
 overtesting/overengineering and explicitly rejected limiting scroll testing to one
 page. The actual reader now draws all loaded pages through Pixi and has worker-owned
@@ -60,16 +206,16 @@ implemented in this slice. No commit/push.
 ### Tasklist — connected mouse-wheel gesture
 
 - [x] Add pure gesture state: immediate first-tick response, same-direction joining
-  within a default 150 ms window, smooth target-rate changes and bounded distance credit.
+      within a default 150 ms window, smooth target-rate changes and bounded distance credit.
 - [x] Integrate timestamped coarse-wheel input in the existing bridge/worker; retain
-  velocity between joined ticks instead of adding a new sharp impulse each tick.
+      velocity between joined ticks instead of adding a new sharp impulse each tick.
 - [x] Preserve quiet-input coast, responsive reversal, 1×–10× scaling, boundary/stop/
-  zoom/picker/blur cleanup, tile-wait protection and the separate precision-input path.
+      zoom/picker/blur cleanup, tile-wait protection and the separate precision-input path.
 - [x] Run focused waveform/travel/interruption checks, check:code, screen build and
-  the existing Pixi/speed interaction checks only; no full suite or new proof app.
+      the existing Pixi/speed interaction checks only; no full suite or new proof app.
 - [x] Record actual results and relaunch Yuzread uncapped for operator feel comparison.
 - [ ] Operator confirms the joined-tick feel on their own mouse/book; tune the window
-  only from that feedback, not by claiming the waveform check proves every hitch gone.
+      only from that feedback, not by claiming the waveform check proves every hitch gone.
 
 Owners remain BodyReaderPixiWorkerPolicy.ts (pure motion), BodyReaderPixiWorker.ts
 (gesture lifetime/camera), BodyReaderPixi.ts (normalized input/timestamp) and reader
@@ -107,36 +253,36 @@ feel comparison is still pending; this does not certify every reported micro-bre
 ### Resource optimization — approved two passes
 
 - [x] Latest operator request: disable the 60-update ceiling (`maxFPS: 0`); retain
-  positive-cap support, momentum, resource optimizations and idle stopping.
+      positive-cap support, momentum, resource optimizations and idle stopping.
 - [ ] Operator comparison of micro-breaks versus Citadel with the ceiling disabled.
-  Static/build checks, three focused pacing/momentum tests and Pixi interaction
-  smoke passed: `.runtime/reader-pixi-1795420618547/result.json`. This tests removal
-  and behavior, not the operator's reported micro-breaks or presented FPS.
+      Static/build checks, three focused pacing/momentum tests and Pixi interaction
+      smoke passed: `.runtime/reader-pixi-1795420618547/result.json`. This tests removal
+      and behavior, not the operator's reported micro-breaks or presented FPS.
 - [x] Pass 1: 60-update deadline, per-tile culling, unchanged-frame skipping and
-  bounded position publication. Idle redraws remain zero.
+      bounded position publication. Idle redraws remain zero.
 - [x] Pass 2: single-level lossless 1024-pixel PNG tiles, one-pixel sampling borders,
-  verified manifests/files and lazy bitmap/texture loading without full-chapter
-  surface reservations in tile mode. Legacy whole-PNG preparation remains supported.
+      verified manifests/files and lazy bitmap/texture loading without full-chapter
+      surface reservations in tile mode. Legacy whole-PNG preparation remains supported.
 - [x] Use a 128 MiB estimated bitmap+texture pool, protecting visible pixels.
-  Lookahead starts at two screens ahead/one behind, expands with fast motion up to
-  four ahead, and prioritizes nearest visible/directional tiles. At most two full
-  tile uploads fit one admitted update. A cold tile waits without consuming momentum
-  or creating a catch-up position jump.
+      Lookahead starts at two screens ahead/one behind, expands with fast motion up to
+      four ahead, and prioritizes nearest visible/directional tiles. At most two full
+      tile uploads fit one admitted update. A cold tile waits without consuming momentum
+      or creating a catch-up position jump.
 - [x] Preserve catalog-owned disk tiles and URLs across archive-worker eviction;
-  reload reuses verified files. Catalog retirement revokes tokens and waits for
-  active/closing workers before deleting its cache. Initial/navigation warm ranges
-  use the actual destination, not a one-pixel page-top placeholder.
+      reload reuses verified files. Catalog retirement revokes tokens and waits for
+      active/closing workers before deleting its cache. Initial/navigation warm ranges
+      use the actual destination, not a one-pixel page-top placeholder.
 - [x] Tile failures preserve the last complete framebuffer, report non-blocking
-  status and stop movement; explicit input retries without closing the GPU canvas.
+      status and stop movement; explicit input retries without closing the GPU canvas.
 - [x] Strict checks, both builds, seven focused contract/math tests, native preparation/
-  lossless seam/cache checks, Pixi smoke and chapter navigation checks passed.
+      lossless seam/cache checks, Pixi smoke and chapter navigation checks passed.
 - [x] Real-CBZ cold/warm comparison and exact-size GPU slot reuse under pool
-  pressure, retaining pixel quality, bounded residency and 10× reversal.
+      pressure, retaining pixel quality, bounded residency and 10× reversal.
 - [x] Stop obsolete tile decode/upload work and crop empty canvas margins without
-  changing the logical viewport, chapter geometry, zoom, speed or tile pool.
+      changing the logical viewport, chapter geometry, zoom, speed or tile pool.
 - [ ] Resolve/accept the GPU upload tradeoff on the operator's real book; do not
-  declare all four resource goals reduced. Actual presented-frame pacing remains
-  unmeasured. No full suite or prolonged benchmark is authorized by this plan.
+      declare all four resource goals reduced. Actual presented-frame pacing remains
+      unmeasured. No full suite or prolonged benchmark is authorized by this plan.
 
 ### Actual-work reduction — 2026-11-23
 
@@ -163,16 +309,16 @@ includes skipped tile/decode/upload byte estimates; these are not CPU-time sampl
 
 Short 1× real-book comparison, same Episode 1/window/DPR/input as before:
 
-| Measurement | Before | After |
-| --- | ---: | ---: |
-| Logical viewport | 1320×1320 | 1320×1320 |
-| Canvas pixels | 1320×1320 | 802×1320 |
-| Cleared pixel area/sec | 104.81 million | 63.62 million |
-| Worker updates/sec, not presented FPS | 60.15 | 60.10 |
-| App GPU busiest-engine average | 6.48% | 5.06% |
-| Dedicated GPU memory average, MB | 101.46 | 87.16 |
-| Renderer working set, MB | 234.30 | 231.43 |
-| Tile-blocked updates / idle redraws | 0 / 0 | 0 / 0 |
+| Measurement                           |         Before |         After |
+| ------------------------------------- | -------------: | ------------: |
+| Logical viewport                      |      1320×1320 |     1320×1320 |
+| Canvas pixels                         |      1320×1320 |      802×1320 |
+| Cleared pixel area/sec                | 104.81 million | 63.62 million |
+| Worker updates/sec, not presented FPS |          60.15 |         60.10 |
+| App GPU busiest-engine average        |          6.48% |         5.06% |
+| Dedicated GPU memory average, MB      |         101.46 |         87.16 |
+| Renderer working set, MB              |         234.30 |        231.43 |
+| Tile-blocked updates / idle redraws   |          0 / 0 |         0 / 0 |
 
 Pixel-area work fell about 39%. The returned viewport region compared byte-identical
 before/after. GPU/VRAM reductions are observations from this short book-specific
@@ -218,15 +364,15 @@ zero. Uploads were not the dominant activity at that speed on this book.
 
 Eight-second 10× reversal before/final:
 
-| Measurement | Before reuse | Final reuse |
-| --- | ---: | ---: |
-| New texture/storage allocations | 121 | 21 |
-| Texture deletions | 104 | 2 |
-| In-place uploads | 0 | 101 |
-| Uploaded image MB | 354.88 | 360.96 |
-| CPU upload-call ms, not GPU duration | 177.5 | 193.4 |
-| Worker updates/sec, not presented FPS | 60.01 | 59.93 |
-| Tile-blocked updates / idle redraws | 0 / 0 | 0 / 0 |
+| Measurement                           | Before reuse | Final reuse |
+| ------------------------------------- | -----------: | ----------: |
+| New texture/storage allocations       |          121 |          21 |
+| Texture deletions                     |          104 |           2 |
+| In-place uploads                      |            0 |         101 |
+| Uploaded image MB                     |       354.88 |      360.96 |
+| CPU upload-call ms, not GPU duration  |        177.5 |       193.4 |
+| Worker updates/sec, not presented FPS |        60.01 |       59.93 |
+| Tile-blocked updates / idle redraws   |        0 / 0 |       0 / 0 |
 
 Allocations fell about 83%; bytes/pixels were not reduced. CPU-time/GPU-percent
 savings are **not** certified. GPU averages were 7.21%/1.92%, but graphics clocks
@@ -252,14 +398,14 @@ presented-FPS measurement or commit/push. Overall acceptance remains partial.
 Short same-fixture comparison (24 patterned 1600×4800 source pages, 1320×1320
 window, DPR 1, eight seconds of 1× wheel input):
 
-| Measurement | Before | Pass 1 | Pass 2 final |
-| --- | ---: | ---: | ---: |
-| Worker draw updates/sec, not presented FPS | 165.05 | 60.08 | 60.20 |
-| Submitted indices | 81,408 | 13,476 | 13,560 |
-| Renderer working set, MB | 612.21 | 602.18 | 200.32 |
-| GPU-process working set, MB, not VRAM | 551.42 | 570.09 | 118.28 |
-| App GPU busiest-engine average | 13.66% | 7.75% | 17.47% |
-| Idle redraws | 0 | 0 | 0 |
+| Measurement                                | Before | Pass 1 | Pass 2 final |
+| ------------------------------------------ | -----: | -----: | -----------: |
+| Worker draw updates/sec, not presented FPS | 165.05 |  60.08 |        60.20 |
+| Submitted indices                          | 81,408 | 13,476 |       13,560 |
+| Renderer working set, MB                   | 612.21 | 602.18 |       200.32 |
+| GPU-process working set, MB, not VRAM      | 551.42 | 570.09 |       118.28 |
+| App GPU busiest-engine average             | 13.66% |  7.75% |       17.47% |
+| Idle redraws                               |      0 |      0 |            0 |
 
 Final dedicated GPU-memory counters averaged 117.26 MB, peak 130.66 MB; no matching
 old VRAM baseline was collected. Final workload CPU percentages were Browser 0.27%,
@@ -281,10 +427,10 @@ explicit-input recovery. Tile residency was 27 tiles/about 126.4 MiB in the work
 
 - [x] Add typed navigation state/commands between Reader, Body and BottomBar.
 - [x] Implement resident chapter jumps and authorized on-demand chapter loading;
-  preserve zoom/speed, stop momentum and retain readable pixels until ready.
+      preserve zoom/speed, stop momentum and retain readable pixels until ready.
 - [x] Enable a bottom hover overlay without changing reader geometry or top controls.
 - [x] Add Previous / Chapter List / Next and a draggable, scrollable chapter popup;
-  highlight current, respect folder order and close on selection/outside/Escape.
+      highlight current, respect folder order and close on selection/outside/Escape.
 - [x] Run focused navigation/UI checks and normal static/build validation only.
 - [x] Update current documentation and relaunch Yuzread for operator testing.
 
@@ -362,7 +508,7 @@ remain separate unfinished features.
 ## 3. Proposed ownership — keep the reader self-contained
 
 ```text
-screen/body/reader/
+screen/reader/body/reader/
 ├── BodyReader.tsx                      Existing document/loading owner and UI
 ├── BodyReaderPixi.ts                   Canvas/worker lifetime and narrow bridge
 ├── BodyReaderPixiWorker.ts             GPU scene, texture queue and frame loop
@@ -397,16 +543,16 @@ tree was clean at planning preflight. Recheck it before implementing and preserv
 any subsequent operator work. Existing tests/results are historical evidence,
 not fresh verification of Pixi.
 
-| Current owner/path | Migration consequence |
-| --- | --- |
-| BodyReader prepare(), images/pendingImages maps | Renderer-neutral accepted-page descriptors replace DOM-image ownership for the Pixi path. Browser bitmap validation and GPU staging become worker operations. |
-| buildChapter(), renderReading(), reconcile(), reclaimUnused() | Retain their policies; replace DOM rectangle/IntersectionObserver decisions with immutable logical geometry plus versioned worker visibility/position. |
-| CSS zoom, scrollTop/scrollLeft and SCROLLBAR section | Adapt to one worker-owned camera, preserving actual column origins, native-style controls and input attribution. No second authoritative scroll position. |
-| screen/index.html | connect-src currently forbids fetch. Worker loading needs a narrowly scoped page-token fetch allowance and explicit worker policy. |
-| CbzArchive page protocol | Fetch is registered, but responses currently have no CORS allowance. Actual file-origin/worker access must be proven with the same token/integrity checks. |
-| Native estimated memory ledger | Existing bitmap/texture allowances must be reconciled with render-worker, framebuffer and staging overhead; do not assume extra allocations are free. |
-| Vite/TypeScript/static checker | Add actual worker bundling and complete strict worker-source coverage, without suppressions or ownership-check shortcuts. |
-| tests/reader-*-proof.mjs | DOM-image assertions cannot certify Pixi. Adapt affected acceptance checks to geometry, source/texture identity and displayed pixels; keep native proofs where still relevant. |
+| Current owner/path                                            | Migration consequence                                                                                                                                                          |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| BodyReader prepare(), images/pendingImages maps               | Renderer-neutral accepted-page descriptors replace DOM-image ownership for the Pixi path. Browser bitmap validation and GPU staging become worker operations.                  |
+| buildChapter(), renderReading(), reconcile(), reclaimUnused() | Retain their policies; replace DOM rectangle/IntersectionObserver decisions with immutable logical geometry plus versioned worker visibility/position.                         |
+| CSS zoom, scrollTop/scrollLeft and SCROLLBAR section          | Adapt to one worker-owned camera, preserving actual column origins, native-style controls and input attribution. No second authoritative scroll position.                      |
+| screen/index.html                                             | connect-src currently forbids fetch. Worker loading needs a narrowly scoped page-token fetch allowance and explicit worker policy.                                             |
+| CbzArchive page protocol                                      | Fetch is registered, but responses currently have no CORS allowance. Actual file-origin/worker access must be proven with the same token/integrity checks.                     |
+| Native estimated memory ledger                                | Existing bitmap/texture allowances must be reconciled with render-worker, framebuffer and staging overhead; do not assume extra allocations are free.                          |
+| Vite/TypeScript/static checker                                | Add actual worker bundling and complete strict worker-source coverage, without suppressions or ownership-check shortcuts.                                                      |
+| tests/reader-*-proof.mjs                                      | DOM-image assertions cannot certify Pixi. Adapt affected acceptance checks to geometry, source/texture identity and displayed pixels; keep native proofs where still relevant. |
 
 ## 5. Runtime design
 

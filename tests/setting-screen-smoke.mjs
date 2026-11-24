@@ -95,13 +95,20 @@ try {
   assert.equal(await gear.getAttribute('aria-expanded'), 'true');
   assert.equal(await popup.getAttribute('aria-modal'), 'false');
   const body = popup.locator('[data-setting-screen-body]');
-  assert.equal(await body.textContent(), '');
+  assert.deepEqual(await body.locator('[data-setting-section-header]').allTextContents(), [
+    'Smooth scroll',
+  ]);
   assert.equal(
     await body.evaluate((node) => node.childElementCount),
-    0,
-    'body is intentionally empty',
+    1,
+    'body contains only the useful JSON-declared section card',
   );
-  assert.ok((await body.boundingBox()).height > 0, 'empty body still has its own reserved area');
+  assert.equal(
+    await body
+      .getByRole('slider', { name: 'Smooth-scroll duration' })
+      .getAttribute('aria-valuenow'),
+    '250',
+  );
   assert.equal(await popup.locator('[data-setting-screen-header]').textContent(), '');
   const title = await popup.locator('[data-part="title"]').boundingBox();
   const close = popup.getByRole('button', { name: 'Close Setting Screen', exact: true });
@@ -213,7 +220,7 @@ try {
     verdict: 'PASS',
     checks: [
       'far-left gear without moving existing controls',
-      'modeless persistent screen with blank/draggable header, right-side local close and empty body',
+      'modeless persistent screen with blank/draggable header, right-side local close and section cards',
       'hover/outside/Escape survival; hidden inert screen/body identity and dragged position retained on reopen',
       'same native window and reader geometry/renderer',
     ],

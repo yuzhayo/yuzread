@@ -4,17 +4,28 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import ClickAwayListener from '@mui/material/ClickAwayListener';
 import Portal from '@mui/material/Portal';
-import Slider from '@mui/material/Slider';
 import TextField from '@mui/material/TextField';
 import ActionButton, { hasActionIcon } from '@ui/ActionButton.tsx';
 import ConfiguredRow, { validateConfiguredRow } from '@ui/ConfiguredRow.tsx';
+import ConfiguredValueSlider, {
+  isConfiguredValueSliderSettings,
+} from '@ui/ConfiguredValueSlider.tsx';
+import type { ConfiguredValueSliderSettings } from '@ui/ConfiguredValueSlider.tsx';
 import { configuredSx } from '@logic/Appearance.ts';
 import { finite, isObject, errorText } from '@logic/VisualConfig.ts';
 import { hasParts, isNamedRecord } from '@logic/ConfigValidation.ts';
 import type { ResolvedConfig, ResolvedPart } from '@logic/ConfigValidation.ts';
+import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ChildProps, ConfigReport } from '@logic/AreaDiscovery.ts';
 import type { DiagnosticIssue } from '@logic/Diagnostics.ts';
-import type { Result } from '../../ShellHost.js';
+import { hasRequestPort, hasStatePort } from '@logic/ParentConnections.ts';
+import type { RequestPort, StatePort } from '@logic/ParentConnections.ts';
+import { isNumberPreference, normalizeNumberPreference } from '@logic/NumberPreference.ts';
+import type {
+  NumberPreferenceDefinition,
+  ReaderNumberSettingChange,
+  Result,
+} from '../../../ShellHost.js';
 
 // CONFIG AND CONTRACT — popup, range, draft and dragging belong to this child.
 export const componentId = 'reader.scrollSpeed';
@@ -22,23 +33,10 @@ export const partKeys = ['panel', 'header', 'reset', 'slider', 'value'] as const
 const controls = ['reset', 'slider', 'value'] as const;
 type Control = (typeof controls)[number];
 const labelKeys = ['title', 'reset', 'slider', 'value', 'drag', 'unit'] as const;
-export const configKeys = [
-  'icon',
-  'min',
-  'max',
-  'normal',
-  'step',
-  'order',
-  'gap',
-  'popup',
-  'labels',
-];
+export const configKeys = ['icon', 'preference', 'order', 'gap', 'popup', 'slider', 'labels'];
 export interface WindowsAreaScrollSpeedConfig extends ResolvedConfig {
   icon: string;
-  min: number;
-  max: number;
-  normal: number;
-  step: number;
+  preference: NumberPreferenceDefinition;
   order: Control[];
   gap: number;
   popup: {
@@ -49,23 +47,15 @@ export interface WindowsAreaScrollSpeedConfig extends ResolvedConfig {
     headerHeight: number;
     rowHeight: number;
     zIndex: number;
-    thumbSize: number;
-    trackSize: number;
   };
+  slider: ConfiguredValueSliderSettings;
   labels: Record<(typeof labelKeys)[number], string>;
   parts: Record<(typeof partKeys)[number], ResolvedPart>;
 }
 export interface WindowsAreaScrollSpeedInput {
-  speed: number;
-  requestSpeed(speed: number): Promise<Result>;
+  speed: number | null;
+  requestSpeed(change: ReaderNumberSettingChange): Promise<Result>;
   report(issue: DiagnosticIssue): void;
-}
-export function normalizeScrollSpeed(value: number, min: number, max: number, step: number) {
-  const clamped = Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
-  return Math.max(
-    min,
-    Math.min(max, Number((min + Math.round((clamped - min) / step) * step).toFixed(6))),
-  );
 }
 export function validateConfig(
   config: ResolvedConfig,
@@ -77,15 +67,13 @@ export function validateConfig(
     report(key, expected, actual);
   };
   if (!hasActionIcon(config.icon)) reject('icon', 'registered action icon', config.icon);
-  if (!finite(config.min, 1, 100) || !finite(config.max, 1, 100) || config.min >= config.max)
-    reject('min', 'min < max, both 1–100 (value/10 speed)', { min: config.min, max: config.max });
   if (
-    !finite(config.normal, 1, 100) ||
-    (typeof config.min === 'number' && config.normal < config.min) ||
-    (typeof config.max === 'number' && config.normal > config.max)
+    !isNumberPreference(config.preference) ||
+    config.preference.id !== 'scrollSpeed' ||
+    config.preference.min < 1 ||
+    config.preference.max > 100
   )
-    reject('normal', 'normal value within range', config.normal);
-  if (!finite(config.step, 0.1, 100)) reject('step', '0.1–100 value step', config.step);
+    reject('preference', 'scrollSpeed number preference within 1–100', config.preference);
   if (
     !isNamedRecord(
       config.labels,
@@ -104,16 +92,46 @@ export function validateConfig(
     !finite(popup.headerHeight, 20, 60) ||
     !finite(popup.rowHeight, 28, 80) ||
     !finite(popup.zIndex, 11, 2000) ||
-    !finite(popup.thumbSize, 8, 32) ||
-    !finite(popup.trackSize, 1, 10) ||
     popup.headerHeight + popup.rowHeight + popup.gap > popup.height
   )
-    reject('popup', 'bounded popup dimensions, layer and slider geometry', popup);
+    reject('popup', 'bounded popup dimensions and layer', popup);
+  if (!isConfiguredValueSliderSettings(config.slider))
+    reject('slider', 'configured thumb and track geometry', config.slider);
   if (hasParts(config, partKeys)) valid = validateConfiguredRow(config, controls, report) && valid;
   return valid;
 }
 
-// LOGIC — local optimistic controls; Reader remains the actual speed owner.
+// CHILD REGISTRATION — speed UI receives only the matching request and state ports.
+interface WindowsAreaScrollSpeedPorts {
+  setScrollSpeed: RequestPort<ReaderNumberSettingChange, Result>;
+  scrollSpeed: StatePort<number | null>;
+}
+const acceptsParentPorts = (value: unknown): value is WindowsAreaScrollSpeedPorts =>
+  hasRequestPort(value, 'setScrollSpeed', 'ui.reader.speed.input', 'ui.reader.speed.output') &&
+  hasStatePort(value, 'scrollSpeed', 'ui.reader.speed.state');
+export const child = defineChild(
+  'WindowsArea',
+  WindowsAreaBtnScrollSpeed,
+  validateConfig,
+  { componentId, configKeys, partKeys },
+  acceptsParentPorts,
+  (ports, report) => ({
+    speed: ports.scrollSpeed.getSnapshot(),
+    requestSpeed: ports.setScrollSpeed.request,
+    report,
+  }),
+);
+
+// LOGIC AND CALCULATIONS — clamp/snap configured values independently of UI state.
+export function normalizeScrollSpeed(value: number, min: number, max: number, step: number) {
+  const clamped = Math.max(min, Math.min(max, Number.isFinite(value) ? value : min));
+  return Math.max(
+    min,
+    Math.min(max, Number((min + Math.round((clamped - min) / step) * step).toFixed(6))),
+  );
+}
+
+// STATE AND COORDINATION — optimistic local controls; Reader remains the speed owner.
 export default function WindowsAreaBtnScrollSpeed({
   config,
   input,
@@ -122,7 +140,10 @@ export default function WindowsAreaBtnScrollSpeed({
     panel = useRef<HTMLDivElement>(null),
     field = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
-  const initial = normalizeScrollSpeed(input.speed * 10, config.min, config.max, config.step);
+  const initial = normalizeNumberPreference(
+    input.speed ?? config.preference.default,
+    config.preference,
+  );
   const [value, setValue] = useState(initial),
     [draft, setDraft] = useState(String(initial));
   const currentValue = useRef(initial),
@@ -140,23 +161,21 @@ export default function WindowsAreaBtnScrollSpeed({
     setDraft(String(currentValue.current));
     setOpen(false);
   };
-  const apply = (candidate: number) => {
-    const next = normalizeScrollSpeed(candidate, config.min, config.max, config.step);
-    if (next === currentValue.current && Math.abs(latest.current.speed - next / 10) < 1e-6) return;
+  const apply = (candidate: number, reset = false) => {
+    const next = normalizeNumberPreference(candidate, config.preference);
+    if (!reset && next === currentValue.current && latest.current.speed === next) return;
     currentValue.current = next;
     setValue(next);
     if (!editing.current) setDraft(String(next));
     void input
-      .requestSpeed(next / 10)
+      .requestSpeed({ value: next, ...(reset ? { reset: true } : {}) })
       .then((result) => {
         if (!result.ok) throw new Error(result.error);
       })
       .catch((error) => {
-        const restored = normalizeScrollSpeed(
-          latest.current.speed * 10,
-          config.min,
-          config.max,
-          config.step,
+        const restored = normalizeNumberPreference(
+          latest.current.speed ?? config.preference.default,
+          config.preference,
         );
         currentValue.current = restored;
         setValue(restored);
@@ -173,15 +192,20 @@ export default function WindowsAreaBtnScrollSpeed({
     if (draft.trim() && Number.isFinite(Number(draft))) apply(Number(draft));
     setDraft(String(currentValue.current));
   };
+
+  // LIFECYCLE AND CLEANUP — synchronize parent state without overwriting an active draft.
   useEffect(() => {
-    const next = normalizeScrollSpeed(input.speed * 10, config.min, config.max, config.step);
+    const next = normalizeNumberPreference(
+      input.speed ?? config.preference.default,
+      config.preference,
+    );
     currentValue.current = next;
     setValue(next);
     if (!editing.current) setDraft(String(next));
-    if (Math.abs(next / 10 - input.speed) > 1e-6) apply(next);
-  }, [input.speed, config.min, config.max, config.step]);
+  }, [input.speed, config.preference]);
 
-  // DRAG — move the panel, never the native window; controls are not drag handles.
+  // UI AND LOCAL EVENTS — DRAG
+  // Move the panel, never the native window; controls are not drag handles.
   const clampPosition = () => {
     const width = Math.min(config.popup.width, innerWidth),
       height = Math.min(config.popup.height, innerHeight);
@@ -234,6 +258,8 @@ export default function WindowsAreaBtnScrollSpeed({
       event.currentTarget.releasePointerCapture(event.pointerId);
     dragging.current = null;
   };
+
+  // LIFECYCLE AND CLEANUP — open-panel keyboard/resize listeners exist only while open.
   useEffect(() => {
     if (!open) return undefined;
     clampPosition();
@@ -253,7 +279,7 @@ export default function WindowsAreaBtnScrollSpeed({
     };
   }, [open, config.popup.width, config.popup.height]);
 
-  // UI — existing MUI controls and JSON-owned visuals, one modeless portal.
+  // UI AND LOCAL EVENTS — existing MUI controls and JSON-owned visuals, one portal.
   return (
     <ClickAwayListener
       onClickAway={() => {
@@ -334,7 +360,7 @@ export default function WindowsAreaBtnScrollSpeed({
                             disableRipple
                             onClick={() => {
                               editing.current = false;
-                              apply(config.normal);
+                              apply(config.preference.default, true);
                               setDraft(String(currentValue.current));
                             }}
                             sx={{ ...configuredSx(part), minWidth: 0, textTransform: 'none' }}
@@ -344,27 +370,18 @@ export default function WindowsAreaBtnScrollSpeed({
                         );
                       if (name === 'slider')
                         return (
-                          <Slider
-                            aria-label={config.labels.slider}
-                            min={config.min}
-                            max={config.max}
-                            step={config.step}
+                          <ConfiguredValueSlider
+                            part={part}
+                            settings={config.slider}
+                            label={config.labels.slider}
+                            min={config.preference.min}
+                            max={config.preference.max}
+                            step={config.preference.step}
                             value={value}
-                            onChange={(_event, next) => {
-                              if (typeof next === 'number') apply(next);
-                            }}
-                            sx={{
-                              ...configuredSx(part),
-                              height: '100%',
-                              padding: 0,
-                              '& .MuiSlider-thumb': {
-                                width: config.popup.thumbSize,
-                                height: config.popup.thumbSize,
-                              },
-                              '& .MuiSlider-track, & .MuiSlider-rail': {
-                                height: config.popup.trackSize,
-                              },
-                            }}
+                            getAriaValueText={(next) =>
+                              `${Number((next / 10).toFixed(2))}${config.labels.unit}`
+                            }
+                            onChange={apply}
                           />
                         );
                       return (
@@ -392,9 +409,9 @@ export default function WindowsAreaBtnScrollSpeed({
                           slotProps={{
                             htmlInput: {
                               'aria-label': config.labels.value,
-                              min: config.min,
-                              max: config.max,
-                              step: config.step,
+                              min: config.preference.min,
+                              max: config.preference.max,
+                              step: config.preference.step,
                               inputMode: 'decimal',
                             },
                           }}

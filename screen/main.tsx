@@ -25,6 +25,8 @@ import type {
   ReaderWorkPriority,
   ReaderMetricEvent,
   ReaderDropRequest,
+  ReaderPreferenceSnapshot,
+  ReaderPreferenceUpdate,
 } from '../ShellHost.js';
 import './styles.css';
 
@@ -193,6 +195,15 @@ async function start() {
       'message',
     ].every((key) => typeof v[key] === 'string') &&
     typeof v.count === 'number';
+  const preferenceSnapshot = (v: unknown): v is ReaderPreferenceSnapshot =>
+    isObject(v) &&
+    v.version === 1 &&
+    isObject(v.values) &&
+    Object.keys(v.values).length <= 64 &&
+    Object.entries(v.values).every(
+      ([id, item]) =>
+        /^[a-z][A-Za-z0-9]{0,63}$/.test(id) && typeof item === 'number' && Number.isFinite(item),
+    );
   const ports = {
     windowAction: createRequest(
       contract('native.window.input', (v: unknown): v is WindowOperation =>
@@ -316,6 +327,22 @@ async function start() {
       contract('native.result', result),
       { ok: false, error: 'Capability is unavailable' },
     ),
+    readerPreferences: createState(
+      contract('native.reader.preferences.state', preferenceSnapshot),
+      bootstrap.readerPreferences,
+    ),
+    saveReaderPreference: createRequest(
+      contract(
+        'native.reader.preference.input',
+        (v: unknown): v is ReaderPreferenceUpdate =>
+          isObject(v) &&
+          typeof v.id === 'string' &&
+          /^[a-z][A-Za-z0-9]{0,63}$/.test(v.id) &&
+          (v.value === null || (typeof v.value === 'number' && Number.isFinite(v.value))),
+      ),
+      contract('native.result', result),
+      { ok: false, error: 'Reader preference storage is unavailable' },
+    ),
     issues: createState(
       contract(
         'native.issues',
@@ -357,6 +384,7 @@ async function start() {
     ports.renderReserve.register(([owner, bytes, limit]) =>
       host.reader.reserveRender(owner, bytes, limit),
     ),
+    ports.saveReaderPreference.register(host.reader.setPreference),
     host.onWindowState(forwardWindowState),
     host.onSectionHover(ports.hover.publish),
     diagnostics.subscribe(() => ports.issues.publish(diagnostics.getSnapshot())),
