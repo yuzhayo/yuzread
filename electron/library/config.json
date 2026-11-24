@@ -1,0 +1,10 @@
+{
+  "title": "yuzread-library",
+  "width": 1000,
+  "height": 760,
+  "minWidth": 720,
+  "minHeight": 500,
+  "startup": "normal",
+  "background": "#240f18",
+  "icon": "electron/assets/yuzread-library.ico"
+}

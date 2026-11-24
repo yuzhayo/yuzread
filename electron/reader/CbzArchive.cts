@@ -1133,14 +1133,17 @@ export function createCbzReader(
   window: BrowserWindow,
   runtimeDirectory: string,
   screenConfig?: unknown,
+  storage?: { stateDirectory: string; diagnosticDirectory: string },
 ) {
   const { app, dialog, protocol, screen }: typeof import('electron') = require('electron');
   const diagnostics = readerDiagnosticsEnabled(screenConfig);
+  const stateDirectory = storage?.stateDirectory ?? path.dirname(runtimeDirectory);
+  const diagnosticDirectory = storage?.diagnosticDirectory ?? stateDirectory;
   const diagnosticLog = diagnostics
-    ? createReaderDiagnosticLog(path.join(path.dirname(runtimeDirectory), 'reader-diagnostics.log'))
+    ? createReaderDiagnosticLog(path.join(diagnosticDirectory, 'reader-diagnostics.log'))
     : null;
   // LOAD PICKER — native persistence only; the Load child supplies the selection policy.
-  const folderFile = path.join(path.dirname(runtimeDirectory), 'load-folder.json');
+  const folderFile = path.join(stateDirectory, 'load-folder.json');
   const directory = async (value: unknown): Promise<string | undefined> => {
     if (
       typeof value !== 'string' ||

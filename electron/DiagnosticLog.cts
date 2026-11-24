@@ -4,8 +4,11 @@ import type { DiagnosticRecord, Result } from '../ShellHost.js';
 import { errorText } from './WindowConfig.cjs';
 
 // LOGIC — one serialized diagnostic sink. Disk failure must not crash the shell.
-export function createDiagnosticLog(directory: string) {
-  const filePath = path.join(directory, 'logs', 'shell.ndjson');
+export function createDiagnosticLog(
+  directory: string,
+  relativePath = path.join('logs', 'shell.ndjson'),
+) {
+  const filePath = path.join(directory, relativePath);
   let queue: Promise<Result> = Promise.resolve({ ok: true });
   return {
     filePath,

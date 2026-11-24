@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 2,
+  "status": { "ready": "Ready", "issues": "Configuration issues" },
+  "presets": {
+    "workspace": { "preset": "base", "colors": { "background": "#0b1730" } },
+    "titleBar": { "preset": "base", "colors": { "background": "#132541" } }
+  },
+  "areas": [
+    {
+      "id": "downloaderWindowsBar",
+      "parentId": "window",
+      "folder": "downloader/windows-area",
+      "label": "Downloader window drag area",
+      "enabled": true,
+      "draggable": true,
+      "overlay": true,
+      "zIndex": 10,
+      "bounds": { "x": 0, "y": 0, "width": 100, "height": 4 },
+      "preset": "base",
+      "hoverPreset": "titleBar",
+      "children": [
+        {
+          "id": "downloaderTitle",
+          "componentId": "downloader.title",
+          "parentId": "downloaderWindowsBar",
+          "label": "Downloader title",
+          "enabled": false,
+          "bounds": { "x": 2, "y": 10, "width": 72, "height": 80 },
+          "preset": "title"
+        },
+        {
+          "id": "downloaderWindowControls",
+          "componentId": "downloader.windowControls",
+          "parentId": "downloaderWindowsBar",
+          "label": "Downloader window controls",
+          "enabled": true,
+          "bounds": { "x": 78, "y": 10, "width": 21, "height": 80 },
+          "preset": "base",
+          "interaction": { "dragRegion": "no-drag" },
+          "order": ["minimize", "defaultSize", "close"],
+          "gap": 2,
+          "labels": {
+            "minimize": "Minimize window",
+            "defaultSize": "Restore default window size",
+            "close": "Close window"
+          },
+          "icons": { "minimize": "minimize", "defaultSize": "maximize", "close": "close" },
+          "parts": {
+            "minimize": { "preset": "captionButton", "size": { "width": 32, "height": 100 } },
+            "defaultSize": { "preset": "captionButton", "size": { "width": 32, "height": 100 } },
+            "close": { "preset": "closeButton", "size": { "width": 32, "height": 100 } }
+          }
+        }
+      ]
+    },
+    {
+      "id": "downloaderBody",
+      "parentId": "window",
+      "folder": "downloader/body",
+      "label": "Downloader workspace",
+      "enabled": true,
+      "draggable": false,
+      "zIndex": 0,
+      "bounds": { "x": 0, "y": 0, "width": 100, "height": 100 },
+      "preset": "workspace",
+      "children": []
+    }
+  ],
+  "connections": [
+    {
+      "from": { "area": "downloaderWindowsBar", "port": "action" },
+      "to": { "area": "native", "port": "windowAction" }
+    },
+    {
+      "from": { "area": "native", "port": "title" },
+      "to": { "area": "downloaderWindowsBar", "port": "title" }
+    },
+    {
+      "from": { "area": "native", "port": "windowState" },
+      "to": { "area": "downloaderWindowsBar", "port": "windowState" }
+    }
+  ]
+}

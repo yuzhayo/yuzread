@@ -156,8 +156,16 @@ export interface DiagnosticRecord {
   message: string;
 }
 export interface BootstrapData {
+  application: {
+    suiteName: string;
+    version: string;
+    id: string;
+    processName: string;
+    appId: string;
+  };
   config: unknown;
   readerPreferences: ReaderPreferenceSnapshot;
+  externalOpenRevision: number;
   windowState: WindowState;
   hoveredSections: string[];
   logPath: string;
@@ -172,6 +180,7 @@ export interface InvokeChannels {
   'shell:diagnostics': { args: [records: DiagnosticRecord[]]; result: Result };
   'shell:startup-error': { args: [message: string]; result: Result };
   'reader:open': { args: [options: ReaderOpenOptions]; result: ReaderOpenResult };
+  'reader:external-open': { args: [options: ReaderOpenOptions]; result: ReaderOpenResult };
   'reader:open-file': {
     args: [filePath: string, options: ReaderOpenOptions];
     result: ReaderOpenResult;
@@ -186,6 +195,7 @@ export interface InvokeChannels {
 export interface EventChannels {
   'shell:window-state': WindowState;
   'shell:section-hover': string[];
+  'reader:external-open-pending': number;
 }
 export type NativeHandlers = {
   [C in keyof InvokeChannels]: (
@@ -201,6 +211,8 @@ export interface ShellHost {
   onSectionHover(callback: (sections: string[]) => void): () => void;
   reader: {
     open(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
+    openExternal(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
+    onExternalOpen(callback: (revision: number) => void): () => void;
     drop(...request: ReaderDropRequest): Promise<ReaderOpenResult>;
     chapter(...request: ReaderChapterRequest): Promise<ReaderChapterResult>;
     prepare(...request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;

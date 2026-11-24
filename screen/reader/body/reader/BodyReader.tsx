@@ -40,6 +40,8 @@ import type {
 } from '../BodyContract.ts';
 export interface BodyReaderInput {
   openArchive(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
+  openExternalArchive(options: ReaderOpenOptions): Promise<ReaderOpenResult>;
+  externalOpenRevision: number;
   openDroppedArchive(request: ReaderDropRequest): Promise<ReaderOpenResult>;
   openChapter(request: ReaderChapterRequest): Promise<ReaderChapterResult>;
   preparePage(request: ReaderPrepareRequest): Promise<ReaderPrepareResult>;
@@ -359,6 +361,13 @@ const acceptsParentPorts = (value: unknown): value is BodyPorts =>
     'native.reader.open.input.v3',
     'native.reader.open.output.v4',
   ) &&
+  hasRequestPort(
+    value,
+    'externalOpen',
+    'native.reader.external-open.input.v1',
+    'native.reader.open.output.v4',
+  ) &&
+  hasStatePort(value, 'externalOpenRevision', 'native.reader.external-open.revision') &&
   hasRequestPort(value, 'dropOpen', 'native.reader.drop.input', 'native.reader.open.output.v4') &&
   hasRequestPort(
     value,
@@ -383,6 +392,8 @@ export const child = defineChild(
   acceptsParentPorts,
   (ports) => ({
     openArchive: ports.archiveOpen.request,
+    openExternalArchive: ports.externalOpen.request,
+    externalOpenRevision: ports.externalOpenRevision.getSnapshot(),
     openDroppedArchive: ports.dropOpen.request,
     openChapter: ports.chapterOpen.request,
     preparePage: ports.prepare.request,
@@ -920,7 +931,12 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     alive = useRef(true),
     opening = useRef(false);
   const navigating = useRef(false),
-    navigationSignature = useRef('');
+    navigationSignature = useRef(''),
+    externalTarget = useRef(0),
+    externalHandled = useRef(0),
+    externalPumping = useRef(false),
+    externalSurfaceReady = useRef(false);
+  externalTarget.current = Math.max(externalTarget.current, input.externalOpenRevision);
   const [display, setDisplay] = useState<ReaderDisplay>({
     name: '',
     count: 0,
@@ -947,6 +963,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   const host = useMemo(
     () => ({
       open: input.openArchive,
+      external: input.openExternalArchive,
       drop: input.openDroppedArchive,
       chapter: input.openChapter,
       prepare: (id: string, index: number, decodeWidth: number, priority: ReaderWorkPriority) =>
@@ -955,6 +972,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     }),
     [
       input.openArchive,
+      input.openExternalArchive,
       input.openDroppedArchive,
       input.openChapter,
       input.preparePage,
@@ -1785,7 +1803,9 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
       };
       const response = droppedFile
         ? await host.drop([droppedFile, options])
-        : await host.open(options);
+        : source.external
+          ? await host.external(options)
+          : await host.open(options);
       if (!alive.current) {
         if (response.ok && 'chapter' in response)
           void host.release(response.catalog.id).catch(() => {});
@@ -1889,6 +1909,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         reconcile(previousReading);
       }
       syncNavigation();
+      queueMicrotask(pumpExternalOpens);
     }
   };
 
@@ -2092,8 +2113,36 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         reconcile(previous);
       }
       if (alive.current) syncNavigation();
+      queueMicrotask(pumpExternalOpens);
     }
   };
+
+  // EXTERNAL OPEN — serialize Explorer requests through the same staged Reader operation.
+  function pumpExternalOpens() {
+    if (
+      !alive.current ||
+      surface.current === null ||
+      !externalSurfaceReady.current ||
+      externalPumping.current ||
+      opening.current ||
+      navigating.current ||
+      externalHandled.current >= externalTarget.current
+    )
+      return;
+    externalPumping.current = true;
+    const revision = externalHandled.current + 1;
+    void openChapter({
+      componentId,
+      instanceId: config.id,
+      filePath: config.filePath,
+      configPath: config.configPath,
+      external: true,
+    }).finally(() => {
+      externalHandled.current = revision;
+      externalPumping.current = false;
+      if (externalHandled.current < externalTarget.current) queueMicrotask(pumpExternalOpens);
+    });
+  }
 
   // UI AND LOCAL EVENTS — ZOOM
   // Only explicit input schedules a frame; ordinary scrolling stays native.
@@ -2258,6 +2307,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     return input.registerOpenRequest((source) => openChapter(source));
   }, [input.registerOpenRequest]);
   useEffect(() => {
+    externalTarget.current = Math.max(externalTarget.current, input.externalOpenRevision);
+    pumpExternalOpens();
+  }, [input.externalOpenRevision]);
+  useEffect(() => {
     syncNavigation();
     return input.registerNavigation(navigateChapter);
   }, [input.registerNavigation, input.publishNavigation]);
@@ -2299,7 +2352,17 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         reserve: (owner, bytes, limit) => input.reserveRender([owner, bytes, limit]),
       });
       surface.current = renderer;
+      externalSurfaceReady.current = false;
+      void renderer
+        .ready()
+        .then(() => {
+          if (surface.current !== renderer) return;
+          externalSurfaceReady.current = true;
+          pumpExternalOpens();
+        })
+        .catch(() => {});
       return () => {
+        externalSurfaceReady.current = false;
         if (surface.current === renderer) surface.current = null;
         void renderer.close();
       };

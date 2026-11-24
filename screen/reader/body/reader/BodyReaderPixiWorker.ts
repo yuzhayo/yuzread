@@ -1194,9 +1194,9 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   y = view.y;
   maxY = view.maxY;
   control = view.control;
-  reply({ version: 1, kind: 'initialized' });
   if (!message.canvas) {
     await reserve(baseline());
+    reply({ version: 1, kind: 'initialized' });
     return;
   }
   renderer = new WebGLRenderer();
@@ -1216,6 +1216,7 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   if (!frameMatches(view)) await resizeRenderer(view);
   const maximum: unknown = renderer.gl.getParameter(renderer.gl.MAX_TEXTURE_SIZE);
   if (!finite(maximum, 4, 65536)) throw new Error('GPU texture limit is invalid');
+  reply({ version: 1, kind: 'initialized' });
   reply({
     version: 1,
     kind: 'ready',

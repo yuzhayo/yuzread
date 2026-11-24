@@ -97,6 +97,8 @@ const native = {
     windowState: windows.endpoints.windowState,
     title: windows.endpoints.title,
     archiveOpen: body.endpoints.archiveOpen,
+    externalOpen: body.endpoints.externalOpen,
+    externalOpenRevision: body.endpoints.externalOpenRevision,
     dropOpen: body.endpoints.dropOpen,
     chapterOpen: body.endpoints.chapterOpen,
     prepare: body.endpoints.prepare,
@@ -143,7 +145,7 @@ test('schema and real area roots preserve enabled area ownership', () => {
     plan.areas.map((a) => a.config.id),
     ['windowsBar', 'body', 'bottomBar'],
   );
-  assert.equal(plan.connections.length, 22);
+  assert.equal(plan.connections.length, 24);
   assert.equal(plan.areas[0].config.parentName, 'WindowsArea');
 });
 test('setting screen config validates icons, header parts and dimensions without moving existing controls', () => {

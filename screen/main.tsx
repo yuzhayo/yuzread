@@ -236,6 +236,18 @@ async function start() {
       contract('native.reader.open.output.v4', openResult),
       { ok: false, error: 'Capability is unavailable' },
     ),
+    externalOpen: createRequest(
+      contract('native.reader.external-open.input.v1', options),
+      contract('native.reader.open.output.v4', openResult),
+      { ok: false, error: 'External CBZ opening is unavailable' },
+    ),
+    externalOpenRevision: createState(
+      contract(
+        'native.reader.external-open.revision',
+        (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0,
+      ),
+      bootstrap.externalOpenRevision,
+    ),
     dropOpen: createRequest(
       contract(
         'native.reader.drop.input',
@@ -372,6 +384,7 @@ async function start() {
       return response;
     }),
     ports.archiveOpen.register(host.reader.open),
+    ports.externalOpen.register(host.reader.openExternal),
     ports.dropOpen.register(([file, options]) => host.reader.drop(file, options)),
     ports.chapterOpen.register(([catalogId, entryId, options, priority]) =>
       host.reader.chapter(catalogId, entryId, options, priority),
@@ -387,6 +400,7 @@ async function start() {
     ports.saveReaderPreference.register(host.reader.setPreference),
     host.onWindowState(forwardWindowState),
     host.onSectionHover(ports.hover.publish),
+    host.reader.onExternalOpen(ports.externalOpenRevision.publish),
     diagnostics.subscribe(() => ports.issues.publish(diagnostics.getSnapshot())),
   ];
   const nativeBinding = parentBinding(ports);
@@ -411,7 +425,11 @@ async function start() {
   );
   document.title = raw.window.title;
   const catalog = await discoverAreas(
-    import.meta.glob(['./**/*.tsx', '!./shared/**', '!./main.tsx', '!./Screen.tsx']),
+    Object.fromEntries(
+      Object.entries(
+        import.meta.glob(['./**/*.tsx', '!./shared/**', '!./main.tsx', '!./Screen.tsx']),
+      ).filter(([file]) => file.startsWith(`./${bootstrap.application.id}/`)),
+    ),
     diagnostics,
   );
   const initialPlan = validateScreenConfig(bootstrap.config, catalog, diagnostics, input);

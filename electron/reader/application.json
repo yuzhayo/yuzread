@@ -1,0 +1,11 @@
+{
+  "kind": "yuzread.application.v1",
+  "id": "reader",
+  "processName": "yuzread-reader",
+  "appId": "com.yuzread.desktop",
+  "userDataFolder": "Yuzread",
+  "screenConfig": "screen/config.json",
+  "windowConfig": "electron/config.json",
+  "iconAccent": "#3478db",
+  "iconGlyph": "book"
+}

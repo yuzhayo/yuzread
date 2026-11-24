@@ -9,6 +9,8 @@ const preloadStrings = (value: unknown): value is string[] =>
   Array.isArray(value) && value.every((item: unknown) => typeof item === 'string');
 const preloadCount = (v: unknown): v is number =>
   typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const preloadExternalRevision = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 const preloadBudget = (v: unknown): v is import('../ShellHost.js').ReaderBudget =>
   preloadRecord(v) &&
   preloadCount(v.limitBytes) &&
@@ -56,8 +58,16 @@ const preloadPreferenceSnapshot = (
 const preloadBootstrap = (value: unknown): value is import('../ShellHost.js').BootstrapResult =>
   preloadFailure(value) ||
   (preloadRecord(value) &&
+    preloadRecord(value.application) &&
+    value.application.suiteName === 'Yuzread' &&
+    typeof value.application.version === 'string' &&
+    typeof value.application.id === 'string' &&
+    /^[a-z][a-z0-9-]{0,31}$/.test(value.application.id) &&
+    value.application.processName === `yuzread-${value.application.id}` &&
+    typeof value.application.appId === 'string' &&
     preloadWindowState(value.windowState) &&
     preloadPreferenceSnapshot(value.readerPreferences) &&
+    preloadExternalRevision(value.externalOpenRevision) &&
     preloadStrings(value.hoveredSections) &&
     typeof value.logPath === 'string' &&
     typeof value.development === 'boolean' &&
@@ -192,9 +202,23 @@ function preloadSubscribe<C extends keyof Events>(
   };
 }
 
+// STATE AND COORDINATION — retain the latest revision so bootstrap/subscription cannot race.
+let externalOpenRevision = 0;
+const externalOpenListeners = new Set<(revision: number) => void>();
+ipcRenderer.on('reader:external-open-pending', (_event, revision: unknown) => {
+  if (!preloadExternalRevision(revision) || revision <= externalOpenRevision) return;
+  externalOpenRevision = revision;
+  externalOpenListeners.forEach((listener) => listener(revision));
+});
+
 // LOGIC — named capabilities only; no Node, raw IPC, native object or file access.
 const shellHost = {
-  bootstrap: () => preloadInvoke('shell:bootstrap', [], preloadBootstrap),
+  bootstrap: async () => {
+    const result = await preloadInvoke('shell:bootstrap', [], preloadBootstrap);
+    if (!('ok' in result))
+      externalOpenRevision = Math.max(externalOpenRevision, result.externalOpenRevision);
+    return result;
+  },
   windowAction: (operation) =>
     preloadInvoke('shell:window-action', [operation], preloadWindowResult),
   diagnostics: (records) => preloadInvoke('shell:diagnostics', [records], preloadResult),
@@ -203,6 +227,13 @@ const shellHost = {
   onSectionHover: (callback) => preloadSubscribe('shell:section-hover', callback, preloadStrings),
   reader: {
     open: (options) => preloadInvoke('reader:open', [options], preloadOpenResult),
+    openExternal: (options) => preloadInvoke('reader:external-open', [options], preloadOpenResult),
+    onExternalOpen: (callback) => {
+      if (typeof callback !== 'function') throw new TypeError('Expected an external-open callback');
+      externalOpenListeners.add(callback);
+      callback(externalOpenRevision);
+      return () => externalOpenListeners.delete(callback);
+    },
     drop: async (file, options) => {
       try {
         const filePath = webUtils.getPathForFile(file);

@@ -2,9 +2,15 @@ import { app, BrowserWindow, nativeImage, screen, shell } from 'electron';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { WindowConfig } from './WindowConfig.cjs';
+import type { SuiteApplication } from './SuiteApplications.cjs';
 import type { WindowActionResult, WindowState } from '../ShellHost.js';
 
 export const appId = 'com.yuzread.desktop';
+type WindowIdentity = Pick<SuiteApplication, 'appId' | 'processName'>;
+const launchArguments = (root: string, identity: WindowIdentity) =>
+  process.defaultApp === true || !app.isPackaged
+    ? `"${root}" --app=${identity.processName.slice('yuzread-'.length)}`
+    : '';
 
 // LOGIC — startup and Return to default share this one native geometry owner.
 function applyLaunchBounds(
@@ -43,7 +49,12 @@ function applyLaunchBounds(
 }
 
 // LOGIC — register the same identity/icon with Windows Shell, without touching pins.
-function registerWindowsShortcut(root: string, iconPath: string, title: string) {
+function registerWindowsShortcut(
+  root: string,
+  iconPath: string,
+  title: string,
+  identity: WindowIdentity,
+) {
   if (process.platform !== 'win32' || process.argv.includes('--qa')) return;
   const directory = path.join(
     app.getPath('appData'),
@@ -52,20 +63,20 @@ function registerWindowsShortcut(root: string, iconPath: string, title: string) 
     'Start Menu',
     'Programs',
   );
-  const shortcut = path.join(directory, 'Yuzread.lnk');
+  const shortcut = path.join(directory, `${identity.processName}.lnk`);
   const options = {
     target: process.execPath,
-    args: app.isPackaged ? '' : `"${root}"`,
+    args: launchArguments(root, identity),
     cwd: root,
     description: title,
     icon: iconPath,
     iconIndex: 0,
-    appUserModelId: appId,
+    appUserModelId: identity.appId,
   };
   fs.mkdirSync(directory, { recursive: true });
   if (fs.existsSync(shortcut)) {
     const existing = shell.readShortcutLink(shortcut);
-    if (existing.appUserModelId !== appId) {
+    if (existing.appUserModelId !== identity.appId) {
       console.error('Yuzread shortcut belongs to another identity; left unchanged.');
       return;
     }
@@ -85,12 +96,17 @@ function registerWindowsShortcut(root: string, iconPath: string, title: string) 
 }
 
 // UI — retain native resizing/snap/shadow, replacing only the visible title bar.
-export function createAppWindow(root: string, config: WindowConfig) {
+export function createAppWindow(
+  root: string,
+  config: WindowConfig,
+  identity: WindowIdentity = { appId, processName: 'yuzread-reader' },
+  registerShortcut = true,
+) {
   const iconPath = config.icon === undefined ? undefined : path.join(root, config.icon);
   const icon = iconPath ? nativeImage.createFromPath(iconPath) : undefined;
   const windowIcon = process.platform === 'win32' ? iconPath : icon;
   if (icon?.isEmpty()) throw new Error(`App icon could not be loaded: ${config.icon}`);
-  if (iconPath) registerWindowsShortcut(root, iconPath, config.title);
+  if (iconPath && registerShortcut) registerWindowsShortcut(root, iconPath, config.title, identity);
   const window = new BrowserWindow({
     title: config.title,
     width: config.width,
@@ -114,9 +130,9 @@ export function createAppWindow(root: string, config: WindowConfig) {
   });
   if (process.platform === 'win32')
     window.setAppDetails({
-      appId,
+      appId: identity.appId,
       ...(iconPath && { appIconPath: iconPath, appIconIndex: 0 }),
-      relaunchCommand: app.isPackaged ? `"${process.execPath}"` : `"${process.execPath}" "${root}"`,
+      relaunchCommand: `"${process.execPath}"${launchArguments(root, identity) ? ` ${launchArguments(root, identity)}` : ''}`,
       relaunchDisplayName: config.title,
     });
   window.setMenu(null);

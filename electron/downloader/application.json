@@ -1,0 +1,11 @@
+{
+  "kind": "yuzread.application.v1",
+  "id": "downloader",
+  "processName": "yuzread-downloader",
+  "appId": "com.yuzread.downloader",
+  "userDataFolder": "YuzreadDownloader",
+  "screenConfig": "screen/downloader/config.json",
+  "windowConfig": "electron/downloader/config.json",
+  "iconAccent": "#218663",
+  "iconGlyph": "download"
+}

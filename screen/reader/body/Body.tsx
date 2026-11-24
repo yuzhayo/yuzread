@@ -12,6 +12,10 @@ export const parentName = 'Body';
 // UI AND PLACEMENT — discovered children render in configured body slots.
 export default function Body({ config, ports, report }: AreaProps<BodyPorts>) {
   useSyncExternalStore(ports.readerPreferences.subscribe, ports.readerPreferences.getSnapshot);
+  useSyncExternalStore(
+    ports.externalOpenRevision.subscribe,
+    ports.externalOpenRevision.getSnapshot,
+  );
   return <AreaChildren nodes={config.nodes} ports={ports} report={report} />;
 }
 

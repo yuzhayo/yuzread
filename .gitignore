@@ -4,3 +4,5 @@ electron-built/
 .runtime/
 *.log
 desktop.ini
+portable/Yuzread/
+releases/

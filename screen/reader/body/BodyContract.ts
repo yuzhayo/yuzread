@@ -37,7 +37,10 @@ export type ScreenOpenResult =
   | { ok: true; chapter: { id: string; pages: number } }
   | Failure
   | undefined;
-export type ReaderOpenIntent = ActionSource & { picker?: ReaderPickerSettings };
+export type ReaderOpenIntent = ActionSource & {
+  picker?: ReaderPickerSettings;
+  external?: boolean;
+};
 
 const integer = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v > 0;
 const count = (v: unknown): v is number =>
@@ -288,6 +291,18 @@ export const createBodyPorts = () => ({
                   typeof v.chapter.pages === 'number'))))),
     ),
     { ok: false, error: 'Capability is unavailable' },
+  ),
+  externalOpen: createRequest(
+    contract('native.reader.external-open.input.v1', options),
+    contract('native.reader.open.output.v4', openResult),
+    { ok: false, error: 'External CBZ opening is unavailable' },
+  ),
+  externalOpenRevision: createState(
+    contract(
+      'native.reader.external-open.revision',
+      (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0,
+    ),
+    0,
   ),
   readerState: createState<ReaderState>(
     contract(

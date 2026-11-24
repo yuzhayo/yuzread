@@ -1,0 +1,11 @@
+{
+  "kind": "yuzread.application.v1",
+  "id": "library",
+  "processName": "yuzread-library",
+  "appId": "com.yuzread.library",
+  "userDataFolder": "YuzreadLibrary",
+  "screenConfig": "screen/library/config.json",
+  "windowConfig": "electron/library/config.json",
+  "iconAccent": "#8555ce",
+  "iconGlyph": "shelves"
+}

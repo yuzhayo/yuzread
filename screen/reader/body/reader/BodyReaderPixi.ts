@@ -574,6 +574,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
 
   // STATE AND COORDINATION — expose only reader-owned commands, never the raw worker.
   return {
+    ready: () => ready,
     setSpeed(next: number) {
       if (closed || !Number.isFinite(next) || next < 0.1 || next > 10 || next === speed) return;
       speed = next;

@@ -9,8 +9,11 @@ call npm.cmd run runtime
 if errorlevel 1 goto failed
 call npm.cmd run build
 if errorlevel 1 goto failed
+call npm.cmd run build:suite-runtime
+if errorlevel 1 goto failed
 set ELECTRON_RUN_AS_NODE=
-start "" "%~dp0node_modules\electron\dist\electron.exe" "%~dp0." %*
+node "%~dp0electron-built\SuiteLauncher.cjs" %*
+if errorlevel 1 goto failed
 popd
 exit /b 0
 :failed

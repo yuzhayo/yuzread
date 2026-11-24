@@ -560,6 +560,14 @@
       "to": { "area": "native", "port": "archiveOpen" }
     },
     {
+      "from": { "area": "body", "port": "externalOpen" },
+      "to": { "area": "native", "port": "externalOpen" }
+    },
+    {
+      "from": { "area": "native", "port": "externalOpenRevision" },
+      "to": { "area": "body", "port": "externalOpenRevision" }
+    },
+    {
       "from": { "area": "body", "port": "chapterOpen" },
       "to": { "area": "native", "port": "chapterOpen" }
     },

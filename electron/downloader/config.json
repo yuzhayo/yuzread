@@ -1,0 +1,10 @@
+{
+  "title": "yuzread-downloader",
+  "width": 900,
+  "height": 700,
+  "minWidth": 720,
+  "minHeight": 500,
+  "startup": "normal",
+  "background": "#0b1730",
+  "icon": "electron/assets/yuzread-downloader.ico"
+}
