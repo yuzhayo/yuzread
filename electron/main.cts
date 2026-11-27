@@ -96,13 +96,13 @@ app.setName(application.processName);
 if (process.platform === 'win32') app.setAppUserModelId(application.appId);
 const userData =
   portableStorage?.userData ??
-  (qa
-    ? path.join(
-        root,
-        '.runtime',
-        `qa-profile-${qaProfileName || process.pid}${application.id === 'reader' ? '' : `-${application.id}`}`,
-      )
-    : path.join(app.getPath('appData'), application.userDataFolder));
+  path.join(
+    root,
+    '.runtime',
+    qa
+      ? `qa-profile-${qaProfileName || process.pid}${application.id === 'reader' ? '' : `-${application.id}`}`
+      : path.join('dev-userdata', application.userDataFolder),
+  );
 fs.mkdirSync(userData, { recursive: true });
 app.setPath('userData', userData);
 if (portableStorage) {

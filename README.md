@@ -108,3 +108,27 @@ truth.
 **Result:** Current operating knowledge now has one permanent owner, generated folders
 are visibly classified, and every completed workspace change must be documented,
 validated, committed and pushed before it can be reported complete.
+
+## 2026-11-27 20:24:44 +07:00 — Development state moved into the repository
+
+**Summary:** Development-launcher userData now stays inside `C:\Apps\yuzread`; the
+legacy `%APPDATA%\Yuzread` profile was moved, and the workspace documentation now
+records where each launch mode keeps its state.
+
+**Done:** Changed the non-portable userData fallback in `electron/main.cts` to
+`.runtime\dev-userdata\<application.userDataFolder>`. Moved the existing development
+profile, including `load-folder.json` and `reader-preferences.json`, into
+`.runtime\dev-userdata\Yuzread` and removed the old `%APPDATA%` directory. Added the
+development-state section, file-map entries and an updated checkpoint to `AGENTS.md`.
+
+**Why:** Daily use is the portable suite, but development launchers were still writing
+Reader JSON outside the project folder. Keeping both launch modes inside their own
+owned folders makes the storage boundary visible and prevents stale external state
+from being mistaken for the portable product's data.
+
+**Result:** `npm run check:code` passed and both `build:electron` and
+`build:suite-runtime` succeeded. A short development Reader launch stayed responsive
+while writing fresh Electron state (`lockfile`, `blob_storage`, `DIPS-wal`) into
+`.runtime\dev-userdata\Yuzread`; the old `%APPDATA%\Yuzread` path was not recreated
+and both Reader JSON files retained their values. The test process was closed
+gracefully. Portable daily-use state at `portable\Yuzread\data\reader\` was untouched.

@@ -6,19 +6,19 @@ must not have to retell the project history to each agent.
 
 ## Workspace checkpoint
 
-- **Last documentation update:** 2026-11-24 23:46:08 +07:00
+- **Last documentation update:** 2026-11-27 20:24:44 +07:00
 - **Documented implementation HEAD:**
-  `df341362dca3e870632cc74c2f12e7cf20255ffd`
-- **Commit time:** 2026-11-24 23:43:08 +07:00
-- **Commit subject:** `feat: add portable suite and native CBZ opening`
+  `7074b05d36d36467c5bfbbd008e73ded35fbc272`
+- **Commit time:** 2026-11-24 23:46:27 +07:00
+- **Commit subject:** `docs: establish workspace agent contract`
 - **Branch/upstream:** `main` → `origin/main`
 - **Previous baseline:**
-  `8dc6dba240c7000c5294da9ada325d26a527957f`
-- **Relationship:** the implementation checkpoint contains the work that had
-  accumulated after the previous baseline. This documentation update is the
-  immediately following commit. A file cannot contain the hash of the commit
-  that contains itself, so every agent must confirm the actual current HEAD and
-  worktree before changing anything.
+  `df341362dca3e870632cc74c2f12e7cf20255ffd`
+- **Relationship:** the implementation checkpoint is the last committed baseline
+  before this change. This documentation update accompanies the development-state
+  relocation commit. A file cannot contain the hash of the commit that contains
+  itself, so every agent must confirm the actual current HEAD and worktree before
+  changing anything.
 
 Required preflight:
 
@@ -265,6 +265,19 @@ the **Current unfinished work** section below.
 - Reader default currently selected in Windows `UserChoice`; never forge or rewrite
   that protected selection.
 
+### Development state location
+
+Development launchers do not use portable storage. `electron/main.cts` places their
+Electron `userData` under
+`C:\Apps\yuzread\.runtime\dev-userdata\<application.userDataFolder>` instead of
+`%APPDATA%\<application.userDataFolder>`. Reader state therefore lives at
+`.runtime/dev-userdata/Yuzread/load-folder.json` and
+`.runtime/dev-userdata/Yuzread/reader-preferences.json`; `reader-cache` and Electron
+generated files stay in that same directory. The former `%APPDATA%\Yuzread` profile
+was moved into the repository, so no Yuzread application JSON remains outside this
+workspace. QA profiles still use `.runtime/qa-profile-*`; daily-use portable data
+still uses `portable/Yuzread/data/reader/`.
+
 ### Current unfinished work
 
 - Operator feel comparison for uncapped Reader pacing remains subjective and unverified.
@@ -458,6 +471,8 @@ C:\Apps\yuzread\
 │
 ├── node_modules\                          [dependencies/auto-generated] npm-managed; never edit.
 ├── .runtime\                              [evidence/auto-generated] QA results/backups/runtime.
+│   ├── dev-userdata\                      [dev/runtime state] In-repository userData for launchers.
+│   └── qa-profile-*                       [dev/runtime state] Isolated QA userData profiles.
 ├── .agents-temp\                          [temporary/auto-generated] Task scratch; remove own leftovers.
 ├── portable\Yuzread\                      [product/auto-generated] Actual-use portable suite.
 │   ├── data\                              [product/persistent] User settings; preserve on rebuild.
