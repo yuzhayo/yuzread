@@ -257,3 +257,36 @@ wheel-hook helper binary matches its source build
 (`electron-built/reader/ReaderGlobalWheelHost.exe` and the portable copy both SHA-256
 `07D6E850382DEA3B6B0751150CDD15513D4C3D0262046CE5C7F58B01CAD056A1`, written
 2026-11-28 11:59:48 after the 11:58:16 source change).
+
+## 2026-11-28 14:25:00 +07:00 - Wheel momentum lands exactly instead of stopping mid-tail
+
+**Summary:** The intermittent small ticks at the end of a wheel scroll were traced
+frame by frame and fixed in the pure motion policy. The camera no longer stops while
+it is still carrying velocity.
+
+**Done:** Instrumented `tests/reader-pixi-smoke.mjs` to record worker `position`
+messages with timestamps and main-thread rAF frames, then replayed one wheel notch.
+The trace showed `blockedFrames = 0` and smoothly decreasing Pixi camera positions, so
+tile loading and rendering were not the cause. The defect was in `advanceWheelGesture`:
+it reported `moving: false` once `remaining < speed` and `velocity < 5 × speed`,
+discarding the rest of the travel. Added a `settling` state to `WheelGesture` that
+continues the residual with constant deceleration to exactly zero and keeps `moving`
+true until the landing. Updated `tests/contract.test.mjs` from approximate travel
+bounds to exact-travel assertions. The smoke fixture now copies the suite
+`application.json` declarations and can replay operator-style preferences with
+`--trace-user-settings`.
+
+**Why:** At 42% speed the old policy stopped around `y = 751.81` with
+`velocity ≈ 17.6 px/s` against an expected `756.0`. The last frames were real motion
+being cut off, which reads as small ticks followed by an abrupt stop.
+
+**Result:** `npm run check:code` passed (69 production files, 23 type proofs).
+`tests/contract.test.mjs` passed 50/50, including exact travel at 60/120/165 Hz.
+`tests/reader-pixi-smoke.mjs` passed normally and with the settings replay (42% speed,
+650 ms smooth, 300 ms momentum), which landed at `756.0000` with zero velocity. Real
+WebGL rendering, tiles, chapter handoff, reversal, zoom, resize and cleanup still
+passed. The automated trace proves the exact landing and the removal of the early stop;
+it does not prove the physical gesture feel, which remains the operator's confirmation
+step. `portable\Yuzread` was rebuilt afterwards: the worker bundle now contains the
+terminal brake, and the operator's `data` files kept identical SHA-256 hashes with logs
+and crash dumps unchanged.

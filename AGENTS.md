@@ -6,17 +6,17 @@ must not have to retell the project history to each agent.
 
 ## Workspace checkpoint
 
-- **Last documentation update:** 2026-11-28 12:15:30 +07:00
+- **Last documentation update:** 2026-11-28 14:24:00 +07:00
 - **Documented implementation HEAD:**
-  `d4ae8cd09efc7bf76b3337496785764eb050e957`
-- **Commit time:** 2026-11-28T12:09:26+07:00
-- **Commit subject:** `fix: scroll in the wheel direction outside the reader window`
+  `f4f13044b0154636e1e7c2dea2ba1090fe05f4e7`
+- **Commit time:** 2026-11-28T14:23:53+07:00
+- **Commit subject:** `fix: brake wheel momentum to an exact landing`
 - **Branch/upstream:** `main` → `origin/main`
 - **Previous baseline:**
-  `225f279dfdd0e31eb52681df63648e9827430c89`
+  `61fc7382fe7e3dfcd62a25c900053207da49ee19`
 - **Relationship:** the implementation checkpoint is the last committed baseline
-  before this change. This documentation update records the Windows file-association
-  state verification.
+  before this change. This documentation update records the wheel momentum
+  terminal-braking fix.
 
 Required preflight:
 
@@ -198,6 +198,9 @@ Do not change these unless the operator requests that exact behavior:
 - Same-direction mouse-wheel ticks join within 150 ms; the first tick is immediate.
 - Scroll speed remains 1×–10× and Smooth Scroll remains 100–2000 ms, default 250 ms.
 - Momentum duration is 100–2000 ms, default 200 ms, independent of smooth scroll.
+- Wheel momentum finishes its remaining travel with a short terminal brake and lands
+  exactly; it never reports stopped while still carrying motion or discards residual
+  distance.
 - Scroll Anywhere is a session-only latch, default OFF every launch, never stored in
   preferences; minimize/hide pauses capture without unlatching it.
 - Scroll Anywhere captures only ordinary vertical wheel input while the pointer is
