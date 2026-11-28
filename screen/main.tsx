@@ -12,6 +12,7 @@ import type {
   WindowActionResult,
   ReaderOpenOptions,
   ReaderOpenResult,
+  Failure,
   ReaderPrepareResult,
   ReaderPrepareRequest,
   ReaderChapterRequest,
@@ -27,6 +28,8 @@ import type {
   ReaderDropRequest,
   ReaderPreferenceSnapshot,
   ReaderPreferenceUpdate,
+  ReaderScrollAnywhereState,
+  ReaderExternalWheel,
 } from '../ShellHost.js';
 import './styles.css';
 
@@ -204,6 +207,26 @@ async function start() {
       ([id, item]) =>
         /^[a-z][A-Za-z0-9]{0,63}$/.test(id) && typeof item === 'number' && Number.isFinite(item),
     );
+  // CONFIG AND CONTRACT — Scroll Anywhere is session-only native state, never a preference.
+  const scrollAnywhereState = (v: unknown): v is ReaderScrollAnywhereState =>
+    isObject(v) &&
+    typeof v.enabled === 'boolean' &&
+    typeof v.active === 'boolean' &&
+    oneOf(v.reason, ['active', 'off', 'minimized', 'not-ready', 'failed'] as const) &&
+    (v.error === undefined || typeof v.error === 'string');
+  const externalWheel = (v: unknown): v is ReaderExternalWheel =>
+    isObject(v) &&
+    typeof v.delta === 'number' &&
+    Number.isInteger(v.delta) &&
+    v.delta !== 0 &&
+    Math.abs(v.delta) <= 2400 &&
+    typeof v.lines === 'number' &&
+    Number.isInteger(v.lines) &&
+    v.lines >= -1 &&
+    v.lines <= 100 &&
+    typeof v.timestamp === 'number' &&
+    Number.isFinite(v.timestamp) &&
+    v.timestamp > 0;
   const ports = {
     windowAction: createRequest(
       contract('native.window.input', (v: unknown): v is WindowOperation =>
@@ -355,6 +378,40 @@ async function start() {
       contract('native.result', result),
       { ok: false, error: 'Reader preference storage is unavailable' },
     ),
+    setScrollAnywhere: createRequest(
+      contract(
+        'native.reader.scroll-anywhere.input',
+        (v: unknown): v is boolean => typeof v === 'boolean',
+      ),
+      contract(
+        'native.reader.scroll-anywhere.output',
+        (v: unknown): v is ReaderScrollAnywhereState | Failure =>
+          isObject(v) &&
+          ((v.ok === false && typeof v.error === 'string') || scrollAnywhereState(v)),
+      ),
+      { ok: false, error: 'Scroll Anywhere is unavailable' },
+    ),
+    scrollAnywhere: createState(
+      contract('native.reader.scroll-anywhere.state', scrollAnywhereState),
+      scrollAnywhereState(bootstrap.scrollAnywhere)
+        ? bootstrap.scrollAnywhere
+        : { enabled: false, active: false, reason: 'off' },
+    ),
+    scrollAnywhereWheel: createState(
+      contract(
+        'native.reader.scroll-anywhere.wheel',
+        (v: unknown): v is ReaderExternalWheel | null => v === null || externalWheel(v),
+      ),
+      null,
+    ),
+    scrollAnywhereReady: createRequest(
+      contract(
+        'native.reader.scroll-anywhere-ready.input',
+        (v: unknown): v is boolean => typeof v === 'boolean',
+      ),
+      contract('native.result', result),
+      { ok: false, error: 'Capability is unavailable' },
+    ),
     issues: createState(
       contract(
         'native.issues',
@@ -398,9 +455,13 @@ async function start() {
       host.reader.reserveRender(owner, bytes, limit),
     ),
     ports.saveReaderPreference.register(host.reader.setPreference),
+    ports.setScrollAnywhere.register(host.reader.setScrollAnywhere),
+    ports.scrollAnywhereReady.register(host.reader.setScrollAnywhereReady),
     host.onWindowState(forwardWindowState),
     host.onSectionHover(ports.hover.publish),
     host.reader.onExternalOpen(ports.externalOpenRevision.publish),
+    host.reader.onScrollAnywhere(ports.scrollAnywhere.publish),
+    host.reader.onScrollAnywhereWheel(ports.scrollAnywhereWheel.publish),
     diagnostics.subscribe(() => ports.issues.publish(diagnostics.getSnapshot())),
   ];
   const nativeBinding = parentBinding(ports);

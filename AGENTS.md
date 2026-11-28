@@ -6,17 +6,17 @@ must not have to retell the project history to each agent.
 
 ## Workspace checkpoint
 
-- **Last documentation update:** 2026-11-28 09:27:30 +07:00
+- **Last documentation update:** 2026-11-28 11:45:25 +07:00
 - **Documented implementation HEAD:**
-  `2452b0c5c91cd93511b67a8a2614f507281dfd0c`
-- **Commit time:** 2026-11-27 20:26:32 +07:00
-- **Commit subject:** `fix: keep development userData inside the repository`
+  `462b67d4a23e2066ef4272f78d6070b80628776d`
+- **Commit time:** 2026-11-28T09:28:41+07:00
+- **Commit subject:** `feat: add independent Momentum duration setting`
 - **Branch/upstream:** `main` → `origin/main`
 - **Previous baseline:**
-  `df341362dca3e870632cc74c2f12e7cf20255ffd`
+  `2452b0c5c91cd93511b67a8a2614f507281dfd0c`
 - **Relationship:** the implementation checkpoint is the last committed baseline
-  before this change. This documentation update accompanies momentum duration
-  feature completion.
+  before this change. This documentation update accompanies Scroll Anywhere
+  outside-window wheel capture completion.
 
 Required preflight:
 
@@ -198,6 +198,11 @@ Do not change these unless the operator requests that exact behavior:
 - Same-direction mouse-wheel ticks join within 150 ms; the first tick is immediate.
 - Scroll speed remains 1×–10× and Smooth Scroll remains 100–2000 ms, default 250 ms.
 - Momentum duration is 100–2000 ms, default 200 ms, independent of smooth scroll.
+- Scroll Anywhere is a session-only latch, default OFF every launch, never stored in
+  preferences; minimize/hide pauses capture without unlatching it.
+- Scroll Anywhere captures only ordinary vertical wheel input while the pointer is
+  outside the whole Reader window; Ctrl/Shift/Alt/Win-modified wheel, horizontal
+  input and injected events keep their normal meaning.
 - Settings persist as validated overrides; Reset removes the override.
 - Ctrl+wheel zooms and Ctrl+0 returns exactly to 100%.
 - Opening geometry/DPI remains fixed for accepted pages; resize changes the viewport,
@@ -244,6 +249,8 @@ the **Current unfinished work** section below.
 - Strict TypeScript modular Reader with automatic area/child discovery.
 - GPU all-page CBZ rendering, bounded tile residency and joined wheel momentum.
 - Zoom, chapter continuation/navigation, drag/drop and persistent speed/smooth/momentum.
+- Session-only Scroll Anywhere latch that scrolls manga from wheel input outside the
+  Reader window through a bundled Windows low-level hook helper.
 - Independent Library and Downloader frameless base windows.
 - Distinct process names, icons, app IDs, userData and single-instance locks.
 - Thin Library-default suite launcher and direct role launchers.
@@ -350,6 +357,9 @@ C:\Apps\yuzread\
 │   │   ├── application.json               Reader identity/process/config declaration.
 │   │   ├── CbzArchive.cts                 Archive catalog, decode, cache, budget and page protocol.
 │   │   ├── ReaderExternalOpen.cts          Validated cold/second-instance CBZ FIFO.
+│   │   ├── ReaderGlobalWheel.cts           Scroll Anywhere helper lifetime, readiness and delivery.
+│   │   ├── ReaderGlobalWheelBuild.cts      Build-time compilation of the wheel hook helper.
+│   │   ├── ReaderGlobalWheelHost.cs        Windows low-level wheel hook helper source.
 │   │   └── ReaderPreferences.cts           Validated atomic Reader override persistence.
 │   ├── library\                           [native/source Library owner]
 │   │   ├── .gitkeep                       Repository marker; no runtime behavior.
@@ -396,6 +406,7 @@ C:\Apps\yuzread\
 │   │   │   ├── WindowsAreaBtnClose.tsx    Close feature child.
 │   │   │   ├── WindowsAreaBtnDefaultSize.tsx Default-square feature child.
 │   │   │   ├── WindowsAreaBtnLoad.tsx     Native CBZ picker feature child.
+│   │   │   ├── WindowsAreaBtnScrollAnywhere.tsx Session-only outside-window wheel latch child.
 │   │   │   ├── WindowsAreaBtnScrollSpeed.tsx Speed popup, value and persistence child.
 │   │   │   ├── WindowsAreaBtnSettingScreen.tsx Settings popup shell/drag/focus child.
 │   │   │   ├── WindowsAreaTitle.tsx       Retained disabled title child.
@@ -445,6 +456,7 @@ C:\Apps\yuzread\
 │   ├── shell-proof.mjs                    Main Reader shell UI integration proof.
 │   ├── chapter-navigation-smoke.mjs       Bottom chapter navigation integration proof.
 │   ├── persistent-settings-smoke.mjs      Reader preference persistence integration proof.
+│   ├── scroll-anywhere-smoke.mjs          Live latch/outside-window wheel integration proof.
 │   ├── scroll-speed-smoke.mjs             Live speed panel/worker integration proof.
 │   ├── setting-screen-smoke.mjs           Settings popup interaction proof.
 │   ├── reader-proof.mjs                   General Reader archive workflow proof.
@@ -499,7 +511,8 @@ Important commands:
 
 ```text
 npm run check:code        Strict types, format check and ownership/contracts
-npm run build:electron    Compile native TypeScript
+npm run build:electron    Compile native TypeScript and the wheel-hook helper
+npm run build:helper      Recompile only the Scroll Anywhere wheel-hook helper
 npm run build:screen      Build browser/UI output
 npm run build             Validate and build both boundaries
 npm run build:portable    Rebuild portable product and release artifacts

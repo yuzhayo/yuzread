@@ -10,6 +10,7 @@ import SettingsIcon from '@mui/icons-material/SettingsOutlined';
 import PreviousIcon from '@mui/icons-material/ChevronLeft';
 import NextIcon from '@mui/icons-material/ChevronRight';
 import ChapterListIcon from '@mui/icons-material/FormatListBulleted';
+import MouseIcon from '@mui/icons-material/Mouse';
 import { configuredSx } from '../logic/Appearance.ts';
 import type { MouseEventHandler } from 'react';
 import type { Visual } from '../logic/VisualConfig.ts';
@@ -26,6 +27,7 @@ const icons = {
   previous: PreviousIcon,
   next: NextIcon,
   chapters: ChapterListIcon,
+  mouse: MouseIcon,
 };
 export type ActionIcon = keyof typeof icons;
 export const hasActionIcon = (name: unknown): name is ActionIcon =>
@@ -37,6 +39,7 @@ export interface ActionButtonProps {
   onClick: MouseEventHandler<HTMLButtonElement>;
   disabled?: boolean;
   expanded?: boolean;
+  pressed?: boolean;
   controls?: string;
 }
 
@@ -48,22 +51,30 @@ export default function ActionButton({
   onClick,
   disabled,
   expanded,
+  pressed,
   controls,
 }: ActionButtonProps) {
   if (!hasActionIcon(icon)) return null;
   const Icon = icons[icon];
   const geometry = config.visual.geometry;
+  const state = pressed ? config.visual.states?.active : undefined;
   return (
     <IconButton
       aria-label={label}
       title={label}
       aria-expanded={expanded}
+      aria-pressed={pressed}
       aria-controls={controls}
+      data-pressed={pressed ? 'true' : undefined}
       onClick={onClick}
       disabled={disabled}
       disableRipple
       className="fill"
-      sx={{ minWidth: 0, ...configuredSx(config) }}
+      sx={{
+        minWidth: 0,
+        ...configuredSx(config),
+        ...(state ? configuredSx(config, 'active') : {}),
+      }}
     >
       <Icon
         aria-hidden="true"

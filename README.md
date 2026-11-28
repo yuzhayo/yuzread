@@ -156,3 +156,40 @@ reversal, smooth-duration pacing and section discovery. Measured travel stays at
 for twenty 100 ms-spaced notches at 200 ms momentum and above; a single notch still stops
 inside its configured window. Scroll Anywhere outside-window capture was not delivered in
 this entry and remains unfinished work.
+
+## 2026-11-28 - Scroll Anywhere outside-window wheel capture
+
+**Summary:** Reader gained a latched Scroll Anywhere toggle immediately left of Scroll
+Speed. While it is on, ordinary vertical wheel input scrolls the manga even when the
+pointer is outside the whole Reader window and another application has focus.
+
+**Done:** Added a bundled Windows low-level wheel-hook helper
+(`electron/reader/ReaderGlobalWheelHost.cs`) compiled at build time into
+`electron-built/reader/ReaderGlobalWheelHost.exe`, plus the native lifetime adapter
+`ReaderGlobalWheel.cts`, trusted IPC routes and runtime-validated preload capabilities.
+The helper consumes wheel input only while armed, only outside the Reader window, only
+without Ctrl/Shift/Alt/Win and only for vertical deltas; everything else passes through
+untouched, injected events are skipped and the Reader never takes focus. The screen side
+adds `WindowsAreaBtnScrollAnywhere.tsx` (component `reader.scrollAnywhere`), Windows Area
+state relay, Body wheel/readiness ports and `injectExternalWheel` in `BodyReaderPixi.ts`,
+which reuses the shared wheel advance path and configured scroll speed. The latch is
+session-only, defaults to OFF every launch, is never written to preferences, and
+minimize/hide pauses capture without unlatching.
+
+**Why:** Reading long pages meant moving the pointer back over the Reader between every
+few notches, and focus-following capture would have broken normal use of other windows.
+A single bundled helper keeps the outside-window path exclusive and cheap, while the
+latch makes the state explicit and reversible.
+
+**Result:** `npm run check:code` passed (69 production files, 23 type proofs) and
+`tests/contract.test.mjs` passed all 50 cases, including the new latch-label and
+connection checks. A focused `tests/scroll-anywhere-smoke.mjs` run passed: the helper
+process count stayed at 0 before latching and 1 while latched, a single native wheel
+event advanced the reader by 81 px, malformed external wheel input was rejected, the
+toggle sat immediately left of Scroll Speed with matching row geometry, the latch
+survived minimize/restore without changing window focus, and no Scroll Anywhere
+preference appeared in `reader-preferences.json`. `npm run build:portable` rebuilt the
+portable product with the helper at
+`portable/Yuzread/resources/app/electron-built/reader/ReaderGlobalWheelHost.exe`; the
+portable Reader started with capture OFF (0 helper processes) and preserved
+`data/reader/reader-preferences.json`, logs and crash dumps.

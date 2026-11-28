@@ -23,6 +23,7 @@ import type {
   ReaderPreferenceSnapshot,
   ReaderPreferenceUpdate,
   ReaderWorkPriority,
+  ReaderExternalWheel,
   Result,
 } from '../../../ShellHost.js';
 
@@ -421,6 +422,34 @@ export const createBodyPorts = () => ({
         Number.isInteger(v[2]) &&
         v[2] >= 64 &&
         v[2] <= 4096,
+    ),
+    contract('native.result', result),
+    { ok: false, error: 'Capability is unavailable' },
+  ),
+  scrollAnywhereWheel: createState(
+    contract(
+      'native.reader.scroll-anywhere.wheel',
+      (v: unknown): v is ReaderExternalWheel | null =>
+        v === null ||
+        (isObject(v) &&
+          typeof v.delta === 'number' &&
+          Number.isInteger(v.delta) &&
+          v.delta !== 0 &&
+          Math.abs(v.delta) <= 2400 &&
+          typeof v.lines === 'number' &&
+          Number.isInteger(v.lines) &&
+          v.lines >= -1 &&
+          v.lines <= 100 &&
+          typeof v.timestamp === 'number' &&
+          Number.isFinite(v.timestamp) &&
+          v.timestamp > 0),
+    ),
+    null,
+  ),
+  scrollAnywhereReady: createRequest(
+    contract(
+      'native.reader.scroll-anywhere-ready.input',
+      (v: unknown): v is boolean => typeof v === 'boolean',
     ),
     contract('native.result', result),
     { ok: false, error: 'Capability is unavailable' },

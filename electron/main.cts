@@ -16,6 +16,8 @@ import { createSectionHover } from './SectionHover.cjs';
 import { registerReaderScheme, createCbzReader } from './reader/CbzArchive.cjs';
 import { createReaderPreferences } from './reader/ReaderPreferences.cjs';
 import { createReaderExternalOpenQueue } from './reader/ReaderExternalOpen.cjs';
+import { createReaderGlobalWheel } from './reader/ReaderGlobalWheel.cjs';
+import { readerGlobalWheelHelper } from './reader/ReaderGlobalWheelBuild.cjs';
 import {
   assertPortableDependencies,
   detectPortableRuntime,
@@ -63,6 +65,8 @@ const channels = [
   'reader:diagnostics',
   'reader:render-reserve',
   'reader:preference',
+  'reader:scroll-anywhere',
+  'reader:scroll-anywhere-ready',
 ] as const satisfies readonly (keyof InvokeChannels)[];
 const unavailableReader = (): { ok: false; error: string } => ({
   ok: false,
@@ -127,6 +131,7 @@ let window: BrowserWindow | undefined;
 let log: ReturnType<typeof createDiagnosticLog> | undefined;
 let reader: ReturnType<typeof createCbzReader> | undefined;
 let preferences: ReturnType<typeof createReaderPreferences> | undefined;
+let scrollAnywhere: ReturnType<typeof createReaderGlobalWheel> | undefined;
 let quitting = false;
 
 if (!ownsLock) app.quit();
@@ -186,6 +191,22 @@ else {
       reader = archive;
       const native = createNativeWindowActions(currentWindow, config.window);
       const sectionHover = createSectionHover(currentWindow, screenConfig.areas);
+      const currentScrollAnywhere =
+        application.id === 'reader'
+          ? createReaderGlobalWheel({
+              window: currentWindow,
+              helperPath: readerGlobalWheelHelper,
+              onWheel: (event) => {
+                if (!currentWindow.isDestroyed() && !currentWindow.webContents.isDestroyed())
+                  currentWindow.webContents.send('reader:scroll-anywhere-wheel', event);
+              },
+              onState: (state) => {
+                if (!currentWindow.isDestroyed() && !currentWindow.webContents.isDestroyed())
+                  currentWindow.webContents.send('reader:scroll-anywhere', state);
+              },
+            })
+          : undefined;
+      scrollAnywhere = currentScrollAnywhere;
       const trusted = (event: IpcMainInvokeEvent) =>
         !currentWindow.isDestroyed() &&
         event.sender === currentWindow.webContents &&
@@ -202,6 +223,11 @@ else {
           },
           config,
           readerPreferences: currentPreferences?.snapshot() ?? { version: 1, values: {} },
+          scrollAnywhere: currentScrollAnywhere?.snapshot() ?? {
+            enabled: false,
+            active: false,
+            reason: 'off',
+          },
           externalOpenRevision: externalOpens.revision(),
           windowState: native.snapshot(),
           hoveredSections: sectionHover.snapshot(),
@@ -237,6 +263,16 @@ else {
           archive?.reserveRender(owner, bytes, limit) ?? unavailableReader(),
         'reader:preference': (update: unknown) =>
           currentPreferences?.update(update) ?? unavailableReader(),
+        'reader:scroll-anywhere': (enabled: unknown) => {
+          if (typeof enabled !== 'boolean')
+            return { ok: false, error: 'Invalid Scroll Anywhere request' };
+          return currentScrollAnywhere?.setEnabled(enabled) ?? unavailableReader();
+        },
+        'reader:scroll-anywhere-ready': (ready: unknown) => {
+          if (typeof ready !== 'boolean') return { ok: false, error: 'Invalid readiness value' };
+          currentScrollAnywhere?.setReady(ready);
+          return { ok: true };
+        },
         'shell:diagnostics': (records: unknown): Result | Promise<Result> => {
           if (!Array.isArray(records) || records.length > 200 || !records.every(diagnosticRecord))
             return { ok: false, error: 'Invalid diagnostic batch' };
@@ -255,6 +291,7 @@ else {
       currentWindow.once('closed', () => {
         native.dispose();
         sectionHover.dispose();
+        void currentScrollAnywhere?.dispose();
         channels.forEach((channel) => ipcMain.removeHandler(channel));
       });
       await currentWindow.loadFile(entry);
@@ -266,12 +303,15 @@ else {
     });
   app.on('window-all-closed', () => app.quit());
   app.on('before-quit', (event) => {
-    if ((log || reader || preferences) && !quitting) {
+    if ((log || reader || preferences || scrollAnywhere) && !quitting) {
       event.preventDefault();
       quitting = true;
-      void Promise.allSettled([reader?.dispose(), log?.flush(), preferences?.flush()]).finally(() =>
-        app.quit(),
-      );
+      void Promise.allSettled([
+        reader?.dispose(),
+        log?.flush(),
+        preferences?.flush(),
+        scrollAnywhere?.dispose(),
+      ]).finally(() => app.quit());
     }
   });
 }

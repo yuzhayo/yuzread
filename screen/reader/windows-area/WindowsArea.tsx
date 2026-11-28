@@ -19,6 +19,7 @@ export default function WindowsArea({ config, ports, report }: AreaProps<Windows
     ports.smoothScrollDuration.subscribe,
     ports.smoothScrollDuration.getSnapshot,
   );
+  useSyncExternalStore(ports.scrollAnywhere.subscribe, ports.scrollAnywhere.getSnapshot);
   return <AreaChildren nodes={config.nodes} ports={ports} report={report} />;
 }
 export const bind = bindArea(WindowsArea, createWindowsAreaPorts);

@@ -55,6 +55,32 @@ const preloadPreferenceSnapshot = (
       Number.isFinite(item) &&
       Math.abs(item) <= 1e9,
   );
+const preloadScrollAnywhere = (
+  value: unknown,
+): value is import('../ShellHost.js').ReaderScrollAnywhereState =>
+  preloadRecord(value) &&
+  typeof value.enabled === 'boolean' &&
+  typeof value.active === 'boolean' &&
+  ['active', 'off', 'minimized', 'not-ready', 'failed'].includes(
+    typeof value.reason === 'string' ? value.reason : '',
+  ) &&
+  (value.error === undefined ||
+    (typeof value.error === 'string' && value.error.length <= 300 && !value.error.includes('\0')));
+const preloadExternalWheel = (
+  value: unknown,
+): value is import('../ShellHost.js').ReaderExternalWheel =>
+  preloadRecord(value) &&
+  typeof value.delta === 'number' &&
+  Number.isInteger(value.delta) &&
+  value.delta !== 0 &&
+  Math.abs(value.delta) <= 120 * 20 &&
+  typeof value.lines === 'number' &&
+  Number.isInteger(value.lines) &&
+  value.lines >= -1 &&
+  value.lines <= 100 &&
+  typeof value.timestamp === 'number' &&
+  Number.isFinite(value.timestamp) &&
+  value.timestamp > 0;
 const preloadBootstrap = (value: unknown): value is import('../ShellHost.js').BootstrapResult =>
   preloadFailure(value) ||
   (preloadRecord(value) &&
@@ -67,6 +93,7 @@ const preloadBootstrap = (value: unknown): value is import('../ShellHost.js').Bo
     typeof value.application.appId === 'string' &&
     preloadWindowState(value.windowState) &&
     preloadPreferenceSnapshot(value.readerPreferences) &&
+    preloadScrollAnywhere(value.scrollAnywhere) &&
     preloadExternalRevision(value.externalOpenRevision) &&
     preloadStrings(value.hoveredSections) &&
     typeof value.logPath === 'string' &&
@@ -260,6 +287,18 @@ const shellHost = {
     reserveRender: (owner, bytes, limit) =>
       preloadInvoke('reader:render-reserve', [owner, bytes, limit], preloadResult),
     setPreference: (update) => preloadInvoke('reader:preference', [update], preloadResult),
+    setScrollAnywhere: (enabled) =>
+      preloadInvoke(
+        'reader:scroll-anywhere',
+        [enabled],
+        (value) => preloadFailure(value) || preloadScrollAnywhere(value),
+      ),
+    setScrollAnywhereReady: (ready) =>
+      preloadInvoke('reader:scroll-anywhere-ready', [ready], preloadResult),
+    onScrollAnywhere: (callback) =>
+      preloadSubscribe('reader:scroll-anywhere', callback, preloadScrollAnywhere),
+    onScrollAnywhereWheel: (callback) =>
+      preloadSubscribe('reader:scroll-anywhere-wheel', callback, preloadExternalWheel),
   },
 } satisfies import('../ShellHost.js').ShellHost;
 contextBridge.exposeInMainWorld('shellHost', shellHost);

@@ -24,6 +24,7 @@ import type {
   ReaderNumberSettingChange,
   ReaderPreferenceSnapshot,
   ReaderPreferenceUpdate,
+  ReaderExternalWheel,
 } from '../../../../ShellHost.js';
 import { defineChild } from '@logic/AreaDiscovery.ts';
 import type { ConfigReport, ChildProps } from '@logic/AreaDiscovery.ts';
@@ -60,6 +61,8 @@ export interface BodyReaderInput {
     handler: (change: ReaderNumberSettingChange) => Result | Promise<Result>,
   ): () => void;
   publishMomentumDuration(durationMs: number): void;
+  subscribeWheel(listener: (event: ReaderExternalWheel) => void): () => void;
+  reportScrollAnywhereReady(ready: boolean): Promise<Result>;
   preferences: ReaderPreferenceSnapshot | null;
   persistPreference(update: ReaderPreferenceUpdate): Promise<Result>;
   registerNavigation(handler: (request: ReaderNavigationRequest) => Promise<Result>): () => void;
@@ -394,6 +397,13 @@ const acceptsParentPorts = (value: unknown): value is BodyPorts =>
   ) &&
   hasRequestPort(value, 'release', 'native.reader.release.input', 'native.result') &&
   hasRequestPort(value, 'readerMetrics', 'native.reader.metrics.input', 'native.result') &&
+  hasStatePort(value, 'scrollAnywhereWheel', 'native.reader.scroll-anywhere.wheel') &&
+  hasRequestPort(
+    value,
+    'scrollAnywhereReady',
+    'native.reader.scroll-anywhere-ready.input',
+    'native.result',
+  ) &&
   hasRequestPort(value, 'renderReserve', 'native.reader.render-reserve.input', 'native.result');
 export const child = defineChild(
   'Body',
@@ -419,6 +429,12 @@ export const child = defineChild(
     publishSmoothScrollDuration: ports.smoothScrollDuration.publish,
     registerMomentumDuration: ports.setMomentumDuration.register,
     publishMomentumDuration: ports.momentumDuration.publish,
+    subscribeWheel: (listener) =>
+      ports.scrollAnywhereWheel.subscribe(() => {
+        const event = ports.scrollAnywhereWheel.getSnapshot();
+        if (event) listener(event);
+      }),
+    reportScrollAnywhereReady: ports.scrollAnywhereReady.request,
     preferences: ports.readerPreferences.getSnapshot(),
     persistPreference: ports.saveReaderPreference.request,
     registerNavigation: ports.navigateChapter.register,
@@ -2504,6 +2520,24 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   useEffect(() => {
     input.publishState({ phase: display.phase, total: display.total });
   }, [display.phase, display.total, input.publishState]);
+  // STATE AND COORDINATION — native Scroll Anywhere only captures wheel when content is readable.
+  useEffect(() => {
+    void input.reportScrollAnywhereReady(display.total > 0 && display.count > 0);
+  }, [display.total, display.count, input.reportScrollAnywhereReady]);
+  useEffect(
+    () => () => {
+      void input.reportScrollAnywhereReady(false);
+    },
+    [input.reportScrollAnywhereReady],
+  );
+  // LIFECYCLE AND CLEANUP — outside-window wheel input reuses the in-window wheel path.
+  useEffect(
+    () =>
+      input.subscribeWheel((event) => {
+        surface.current?.injectExternalWheel(event.delta, event.lines, event.timestamp);
+      }),
+    [input.subscribeWheel],
+  );
   // UI AND LOCAL EVENTS — native scroll container and configured status presentation.
   return (
     <Box

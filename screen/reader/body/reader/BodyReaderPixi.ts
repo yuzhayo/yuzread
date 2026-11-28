@@ -299,6 +299,8 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     post({ version: 1, kind: 'view', view: measure() });
   }
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  // One text line in the reader viewport; the OS hook reports wheel input in lines, not pixels.
+  const textLineHeight = () => parseFloat(getComputedStyle(view).lineHeight) || 16;
   // Shared camera advance for wheel input from this window and the global hook helper.
   function advanceWheel(distance: number, time: number) {
     if (!initialized || !options.canScroll()) return;
@@ -335,12 +337,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       !event.deltaY
     )
       return;
-    const unit =
-      mode === 2
-        ? view.clientHeight
-        : mode === 1
-          ? parseFloat(getComputedStyle(view).lineHeight) || 16
-          : 1;
+    const unit = mode === 2 ? view.clientHeight : mode === 1 ? textLineHeight() : 1;
     const distance = Math.max(-1e6, Math.min(1e6, event.deltaY * unit * speed));
     // Fine pixel streams already carry device inertia; leave them native rather than adding a second coast.
     if (mode === 0 && Math.abs(event.deltaY) < 40) {
@@ -635,6 +632,18 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       });
     },
     stop,
+    // STATE AND COORDINATION — outside-window wheel input reuses the local wheel path.
+    injectExternalWheel(delta: number, lines: number, timestamp: number) {
+      if (closed || !Number.isFinite(delta) || !delta) return;
+      if (!Number.isFinite(lines) || lines < -1 || lines > 100) return;
+      if (!Number.isFinite(timestamp) || timestamp <= 0) return;
+      const notches = delta / 120;
+      const distance =
+        lines === -1 ? notches * view.clientHeight : notches * lines * textLineHeight() * speed;
+      const bounded = Math.max(-1e6, Math.min(1e6, distance));
+      if (!bounded) return;
+      advanceWheel(bounded, timestamp);
+    },
     syncLayout,
     close,
     async preparePage(

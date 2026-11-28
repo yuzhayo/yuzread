@@ -24,6 +24,7 @@ import * as Navigation from '../screen/reader/bottom-bar/BottomBarChapterNavigat
 import * as Status from '../screen/reader/bottom-bar/BottomBarStatus.tsx';
 import * as Load from '../screen/reader/windows-area/WindowsAreaBtnLoad.tsx';
 import * as Speed from '../screen/reader/windows-area/WindowsAreaBtnScrollSpeed.tsx';
+import * as ScrollAnywhere from '../screen/reader/windows-area/WindowsAreaBtnScrollAnywhere.tsx';
 import * as SettingScreen from '../screen/reader/windows-area/WindowsAreaBtnSettingScreen.tsx';
 import * as SmoothSection from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSectionSmoothScroll.tsx';
 import * as MomentumSection from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSectionMomentumDuration.tsx';
@@ -58,6 +59,7 @@ const modules = {
   './reader/windows-area/WindowsArea.tsx': WindowsArea,
   './reader/windows-area/WindowsAreaBtnSettingScreen.tsx': SettingScreen,
   './reader/windows-area/WindowsAreaBtnScrollSpeed.tsx': Speed,
+  './reader/windows-area/WindowsAreaBtnScrollAnywhere.tsx': ScrollAnywhere,
   './reader/windows-area/WindowsAreaBtnLoad.tsx': Load,
   './reader/windows-area/WindowsAreaBtnClose.tsx': Close,
   './reader/windows-area/WindowsAreaBtnDefaultSize.tsx': DefaultSize,
@@ -106,6 +108,10 @@ const native = {
     release: body.endpoints.release,
     readerMetrics: body.endpoints.readerMetrics,
     renderReserve: body.endpoints.renderReserve,
+    setScrollAnywhere: windows.endpoints.setScrollAnywhere,
+    scrollAnywhere: windows.endpoints.scrollAnywhere,
+    scrollAnywhereWheel: body.endpoints.scrollAnywhereWheel,
+    scrollAnywhereReady: body.endpoints.scrollAnywhereReady,
     readerPreferences: body.endpoints.readerPreferences,
     saveReaderPreference: body.endpoints.saveReaderPreference,
     issues: bottom.endpoints.issues,
@@ -123,6 +129,7 @@ const definitions = [
   ['WindowsAreaBtnSettingScreen.tsx', SettingScreen],
   ['WindowsAreaBtnLoad.tsx', Load],
   ['WindowsAreaBtnScrollSpeed.tsx', Speed],
+  ['WindowsAreaBtnScrollAnywhere.tsx', ScrollAnywhere],
   ['WindowsAreaBtnClose.tsx', Close],
   ['WindowsAreaBtnDefaultSize.tsx', DefaultSize],
   ['reader/BodyReader.tsx', Reader],
@@ -146,7 +153,7 @@ test('schema and real area roots preserve enabled area ownership', () => {
     plan.areas.map((a) => a.config.id),
     ['windowsBar', 'body', 'bottomBar'],
   );
-  assert.equal(plan.connections.length, 26);
+  assert.equal(plan.connections.length, 30);
   assert.equal(plan.areas[0].config.parentName, 'WindowsArea');
 });
 test('setting screen config validates icons, header parts and dimensions without moving existing controls', () => {
@@ -196,6 +203,7 @@ test('setting screen config validates icons, header parts and dimensions without
       false,
     );
   const bar = area(source, 'windowsBar');
+  assert.equal(bar.children.find((child) => child.id === 'readerScrollAnywhere').bounds.x, 75.5);
   assert.equal(bar.children.find((child) => child.id === 'readerScrollSpeed').bounds.x, 80.25);
   assert.equal(bar.children.find((child) => child.id === 'readerOpen').bounds.x, 85);
   assert.equal(group(source).bounds.x, 89.75);
@@ -879,6 +887,35 @@ test('speed control clamps configured values and retains tenth-step multipliers'
     Speed.validateConfig({ ...config, slider: { thumbSize: 0, trackSize: 3 } }, () => {}),
     false,
   );
+});
+test('scroll anywhere control latches through validated labels without a preference key', () => {
+  const config = nodes(source, 'windowsBar').find(
+    (node) => node.config.id === 'readerScrollAnywhere',
+  ).config;
+  assert.equal(
+    ScrollAnywhere.validateConfig(config, () => {}),
+    true,
+  );
+  assert.equal(config.icon, 'mouse');
+  assert.equal(
+    ScrollAnywhere.validateConfig({ ...config, icon: 'not-an-icon' }, () => {}),
+    false,
+  );
+  assert.equal(
+    ScrollAnywhere.validateConfig(
+      { ...config, labels: { ...config.labels, active: ' ' } },
+      () => {},
+    ),
+    false,
+  );
+  assert.equal(
+    ScrollAnywhere.validateConfig(
+      { ...config, labels: { ...config.labels, extra: 'x' } },
+      () => {},
+    ),
+    false,
+  );
+  assert.equal(ScrollAnywhere.child.configKeys.includes('preference'), false);
 });
 test('speed control scales ongoing momentum exactly without an old 1x velocity ceiling', () => {
   const normal = advanceMomentum(500, 600, 1 / 60, 1),

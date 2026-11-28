@@ -547,6 +547,27 @@
           }
         },
         {
+          "id": "readerScrollAnywhere",
+          "componentId": "reader.scrollAnywhere",
+          "parentId": "windowsBar",
+          "label": "Scroll Anywhere",
+          "enabled": true,
+          "bounds": {
+            "x": 75.5,
+            "y": 8,
+            "width": 4.5,
+            "height": 84
+          },
+          "preset": "captionButton",
+          "icon": "mouse",
+          "labels": {
+            "off": "Scroll Anywhere is off — click to scroll with the wheel outside the reader window",
+            "active": "Scroll Anywhere is active",
+            "paused": "Scroll Anywhere is paused while the window is minimized or hidden",
+            "failed": "Scroll Anywhere is unavailable"
+          }
+        },
+        {
           "id": "readerScrollSpeed",
           "componentId": "reader.scrollSpeed",
           "parentId": "windowsBar",
@@ -1036,6 +1057,46 @@
       "to": {
         "area": "windowsBar",
         "port": "momentumDuration"
+      }
+    },
+    {
+      "from": {
+        "area": "windowsBar",
+        "port": "setScrollAnywhere"
+      },
+      "to": {
+        "area": "native",
+        "port": "setScrollAnywhere"
+      }
+    },
+    {
+      "from": {
+        "area": "native",
+        "port": "scrollAnywhere"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "scrollAnywhere"
+      }
+    },
+    {
+      "from": {
+        "area": "native",
+        "port": "scrollAnywhereWheel"
+      },
+      "to": {
+        "area": "body",
+        "port": "scrollAnywhereWheel"
+      }
+    },
+    {
+      "from": {
+        "area": "body",
+        "port": "scrollAnywhereReady"
+      },
+      "to": {
+        "area": "native",
+        "port": "scrollAnywhereReady"
       }
     },
     {

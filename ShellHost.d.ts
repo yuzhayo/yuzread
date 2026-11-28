@@ -21,6 +21,19 @@ export interface ReaderMetricEvent {
   values: Record<string, ReaderMetricValue>;
 }
 export type Result = { ok: true } | Failure;
+// Scroll Anywhere is session-only: it is never written to preferences.
+export type ReaderScrollAnywhereReason = 'active' | 'off' | 'minimized' | 'not-ready' | 'failed';
+export interface ReaderScrollAnywhereState {
+  enabled: boolean;
+  active: boolean;
+  reason: ReaderScrollAnywhereReason;
+  error?: string;
+}
+export interface ReaderExternalWheel {
+  delta: number;
+  lines: number;
+  timestamp: number;
+}
 export interface NumberPreferenceDefinition {
   id: string;
   kind: 'number';
@@ -165,6 +178,7 @@ export interface BootstrapData {
   };
   config: unknown;
   readerPreferences: ReaderPreferenceSnapshot;
+  scrollAnywhere: ReaderScrollAnywhereState;
   externalOpenRevision: number;
   windowState: WindowState;
   hoveredSections: string[];
@@ -191,11 +205,18 @@ export interface InvokeChannels {
   'reader:diagnostics': { args: [events: ReaderMetricEvent[]]; result: Result };
   'reader:render-reserve': { args: ReaderRenderReserveRequest; result: Result };
   'reader:preference': { args: [update: ReaderPreferenceUpdate]; result: Result };
+  'reader:scroll-anywhere': {
+    args: [enabled: boolean];
+    result: ReaderScrollAnywhereState | Failure;
+  };
+  'reader:scroll-anywhere-ready': { args: [ready: boolean]; result: Result };
 }
 export interface EventChannels {
   'shell:window-state': WindowState;
   'shell:section-hover': string[];
   'reader:external-open-pending': number;
+  'reader:scroll-anywhere': ReaderScrollAnywhereState;
+  'reader:scroll-anywhere-wheel': ReaderExternalWheel;
 }
 export type NativeHandlers = {
   [C in keyof InvokeChannels]: (
@@ -220,5 +241,9 @@ export interface ShellHost {
     diagnostics(events: ReaderMetricEvent[]): Promise<Result>;
     reserveRender(...request: ReaderRenderReserveRequest): Promise<Result>;
     setPreference(update: ReaderPreferenceUpdate): Promise<Result>;
+    setScrollAnywhere(enabled: boolean): Promise<ReaderScrollAnywhereState | Failure>;
+    setScrollAnywhereReady(ready: boolean): Promise<Result>;
+    onScrollAnywhere(callback: (state: ReaderScrollAnywhereState) => void): () => void;
+    onScrollAnywhereWheel(callback: (event: ReaderExternalWheel) => void): () => void;
   };
 }

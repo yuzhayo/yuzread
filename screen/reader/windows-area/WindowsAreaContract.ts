@@ -5,6 +5,7 @@ import type {
   Failure,
   ReaderNumberSettingChange,
   ReaderPickerSettings,
+  ReaderScrollAnywhereState,
   Result,
   WindowActionResult,
   WindowOperation,
@@ -91,6 +92,33 @@ export const createWindowsAreaPorts = () => ({
         v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 100 && v <= 2000),
     ),
     null,
+  ),
+  setScrollAnywhere: createRequest(
+    contract(
+      'native.reader.scroll-anywhere.input',
+      (v: unknown): v is boolean => typeof v === 'boolean',
+    ),
+    contract(
+      'native.reader.scroll-anywhere.output',
+      (v: unknown): v is ReaderScrollAnywhereState | Failure =>
+        isObject(v) &&
+        ((v.ok === false && typeof v.error === 'string') ||
+          (typeof v.enabled === 'boolean' &&
+            typeof v.active === 'boolean' &&
+            oneOf(v.reason, ['active', 'off', 'minimized', 'not-ready', 'failed'] as const))),
+    ),
+    { ok: false, error: 'Scroll Anywhere is unavailable' },
+  ),
+  scrollAnywhere: createState(
+    contract(
+      'native.reader.scroll-anywhere.state',
+      (v: unknown): v is ReaderScrollAnywhereState =>
+        isObject(v) &&
+        typeof v.enabled === 'boolean' &&
+        typeof v.active === 'boolean' &&
+        oneOf(v.reason, ['active', 'off', 'minimized', 'not-ready', 'failed'] as const),
+    ),
+    { enabled: false, active: false, reason: 'off' },
   ),
   open: createRequest(
     contract(
