@@ -225,3 +225,35 @@ the latch survived minimize/restore without changing focus, and nothing was writ
 `reader-preferences.json`. A real outside-window wheel gesture in the portable product is
 still the operator's confirmation step; the automated check covers the helper-to-reader
 direction contract, not the physical mouse.
+
+## 2026-11-28 12:15:30 +07:00 - Windows file-association state verified and checkpoint refreshed
+
+**Summary:** The machine's CBZ file-association state was re-verified by direct registry
+inspection, and the workspace checkpoint was refreshed to the current implementation
+commit.
+
+**Done:** Confirmed `Yuzread.Reader.CBZ.1` still owns the `.cbz` ProgID, icon, open
+command and `com.yuzread.desktop` identity, that `HKCU\Software\Yuzread\Reader\Capabilities`
+and the `Yuzread Reader` RegisteredApplications value are present, and that the protected
+`FileExts\.cbz\UserChoice` still reads `Yuzread.Reader.CBZ.1` with hash `gN3KQ9os0tY=`.
+Confirmed no Calibre registration survives in `HKCU` or `HKLM` (Calibre2 capability tree,
+Calibre ProgID roots, `calibre.exe`/`ebook-viewer.exe`/`ebook-edit.exe` application keys,
+App Paths entries, RegisteredApplications values). Recorded the verified state and the
+residual Explorer's own Open With history in `AGENTS.md`, and updated its checkpoint from
+`225f279` to `d4ae8cd`.
+
+**Why:** The 2026-11-24 cleanup entry recorded what was removed, but nothing in the
+workspace re-confirmed the live machine state afterwards, and the checkpoint still named
+a superseded implementation commit. Both facts matter to a new agent deciding whether
+association work is outstanding.
+
+**Result:** `AGENTS.md` now states the verified association layout, confirms the absence
+of Calibre ownership, and records that the leftover `FileExts\.cbz` Open With history
+(`Manga Reader.exe`, `readest.exe`, `Acrobat.exe`, `CDisplayEx.exe`) belongs to Explorer's
+per-user history rather than to Yuzread and is not edited by this workspace. No registry
+value was written or deleted during this check. `git status` was clean before the
+documentation edit and the worktree is committed and pushed afterwards. The portable
+wheel-hook helper binary matches its source build
+(`electron-built/reader/ReaderGlobalWheelHost.exe` and the portable copy both SHA-256
+`07D6E850382DEA3B6B0751150CDD15513D4C3D0262046CE5C7F58B01CAD056A1`, written
+2026-11-28 11:59:48 after the 11:58:16 source change).

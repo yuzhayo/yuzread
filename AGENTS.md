@@ -6,17 +6,17 @@ must not have to retell the project history to each agent.
 
 ## Workspace checkpoint
 
-- **Last documentation update:** 2026-11-28 12:07:14 +07:00
+- **Last documentation update:** 2026-11-28 12:15:30 +07:00
 - **Documented implementation HEAD:**
-  `225f279dfdd0e31eb52681df63648e9827430c89`
-- **Commit time:** 2026-11-28T11:48:03+07:00
-- **Commit subject:** `feat: add Scroll Anywhere outside-window wheel capture`
+  `d4ae8cd09efc7bf76b3337496785764eb050e957`
+- **Commit time:** 2026-11-28T12:09:26+07:00
+- **Commit subject:** `fix: scroll in the wheel direction outside the reader window`
 - **Branch/upstream:** `main` → `origin/main`
 - **Previous baseline:**
-  `462b67d4a23e2066ef4272f78d6070b80628776d`
+  `225f279dfdd0e31eb52681df63648e9827430c89`
 - **Relationship:** the implementation checkpoint is the last committed baseline
-  before this change. This documentation update accompanies the Scroll Anywhere
-  wheel-direction correction.
+  before this change. This documentation update records the Windows file-association
+  state verification.
 
 Required preflight:
 
@@ -274,6 +274,32 @@ the **Current unfinished work** section below.
 - Reader default currently selected in Windows `UserChoice`; never forge or rewrite
   that protected selection.
 
+### Verified Windows file-association state
+
+Verified on 2026-11-28 by direct registry inspection, not from memory:
+
+```text
+HKCU\Software\Classes\Yuzread.Reader.CBZ.1            present
+  shell\open\command  "…\portable\Yuzread\yuzread-reader.exe" "%1"
+  DefaultIcon         "…\portable\Yuzread\yuzread-reader.exe",0
+  AppUserModelID      com.yuzread.desktop
+HKCU\Software\Yuzread\Reader\Capabilities             present
+HKCU\Software\RegisteredApplications\Yuzread Reader  present
+HKCU\…\Explorer\FileExts\.cbz\UserChoice
+  ProgId = Yuzread.Reader.CBZ.1   Hash = gN3KQ9os0tY=
+```
+
+No Calibre registration survives in `HKCU`/`HKLM`: `Calibre2`, `Calibre2` classes,
+`calibre*.exe`/`ebook-viewer.exe`/`ebook-edit.exe` application keys, App Paths
+entries and RegisteredApplications values are all absent. Residual `FileExts\.cbz`
+Open With history still lists other installed readers (`Manga Reader.exe`,
+`readest.exe`, `Acrobat.exe`, `CDisplayEx.exe`) — that list is Explorer's per-user
+history, not Yuzread ownership, and it is not edited by Yuzread.
+
+`HKCU\Software\Classes\.cbz` still holds two legacy values, `Content Type`
+(`image/cbz`) and an empty `cbz_backup`, plus an `OpenWithProgIDs` entry naming
+only `Yuzread.Reader.CBZ.1`. They are harmless and are not owned by this workspace.
+
 ### Development state location
 
 Development launchers do not use portable storage. `electron/main.cts` places their
@@ -293,6 +319,9 @@ still uses `portable/Yuzread/data/reader/`.
 - Presented FPS, universal real-book performance and GPU-loss recovery are not certified.
 - Scroll Anywhere is single-window per Windows session: the helper mutex lets only one
   Reader window capture wheel input at a time; a second window reports unavailable.
+- A physical outside-window wheel gesture in the portable product is still the
+  operator's confirmation step; the automated check covers the helper-to-reader
+  direction contract, not the physical mouse.
 - Library catalog/business behavior is not implemented.
 - Downloader acquisition/business behavior is not implemented.
 - Downloader-to-Library completed-file layout and Library-to-Reader handoff require
