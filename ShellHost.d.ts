@@ -30,6 +30,7 @@ export interface ReaderScrollAnywhereState {
   error?: string;
 }
 export interface ReaderExternalWheel {
+  /** Browser wheel convention: positive means wheel-toward-user (scroll down). */
   delta: number;
   lines: number;
   timestamp: number;

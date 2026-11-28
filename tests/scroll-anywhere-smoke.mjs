@@ -20,18 +20,23 @@ await promisify(execFile)('python', [
   'import pathlib,sys,zipfile; p=pathlib.Path(sys.argv[1]); z=zipfile.ZipFile(p/"chapter.cbz","w",zipfile.ZIP_DEFLATED); [z.write(f,f.name) for f in sorted((p/"pages").glob("*.png"))]; z.close()',
   evidence,
 ]);
-const helperProcesses = async () => {
+// Only helpers started by this launched Reader count; unrelated Reader windows may exist.
+const baselineHelpers = new Set();
+const helperPids = async () => {
   try {
     const { stdout } = await promisify(execFile)('powershell', [
       '-NoProfile',
       '-Command',
-      "(Get-Process -Name 'ReaderGlobalWheelHost' -ErrorAction SilentlyContinue | Measure-Object).Count",
+      "(Get-Process -Name 'ReaderGlobalWheelHost' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id }) -join ','",
     ]);
-    return Number(stdout.trim());
+    return stdout.trim().split(',').filter(Boolean).map(Number);
   } catch {
-    return 0;
+    return [];
   }
 };
+for (const pid of await helperPids()) baselineHelpers.add(pid);
+const helperProcesses = async () =>
+  (await helperPids()).filter((pid) => !baselineHelpers.has(pid)).length;
 const env = { ...process.env };
 delete env.ELECTRON_RUN_AS_NODE;
 const errors = [];
@@ -122,6 +127,26 @@ try {
   );
   const after = await top();
   assert.ok(after - before > 20, `one notch must advance the reader: ${after - before}`);
+  // Direction must match the browser convention: positive delta scrolls down, negative up.
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send('reader:scroll-anywhere-wheel', {
+      delta: -120,
+      lines: 3,
+      timestamp: Date.now(),
+    }),
+  );
+  await page.waitForFunction(
+    () => document.querySelector('[data-reader-viewport]').dataset.readerMoving === 'true',
+    null,
+    { timeout: 3000 },
+  );
+  await page.waitForFunction(
+    () => document.querySelector('[data-reader-viewport]').dataset.readerMoving === 'false',
+    null,
+    { timeout: 4000 },
+  );
+  const reversed = await top();
+  assert.ok(after - reversed > 20, `a negative delta must scroll up: ${after - reversed}`);
   // Modified and horizontal input keep their meaning; only vertical unmodified wheel scrolls.
   await page.evaluate(() => {
     document.querySelector('[data-reader-viewport]').scrollTop = 0;

@@ -193,3 +193,35 @@ portable product with the helper at
 `portable/Yuzread/resources/app/electron-built/reader/ReaderGlobalWheelHost.exe`; the
 portable Reader started with capture OFF (0 helper processes) and preserved
 `data/reader/reader-preferences.json`, logs and crash dumps.
+
+## 2026-11-28 - Scroll Anywhere wheel direction corrected
+
+**Summary:** Scroll Anywhere outside-window scrolling now moves the manga in the same
+direction as the wheel. Wheel-down scrolls down and wheel-up scrolls up, matching the
+in-window reader.
+
+**Done:** Converted the Windows `WM_MOUSEWHEEL` sign to the browser wheel convention
+inside the mouse hook helper (`electron/reader/ReaderGlobalWheelHost.cs`), where the raw
+OS delta is negated before it is emitted, and documented the convention on
+`ReaderExternalWheel.delta` in `ShellHost.d.ts`. No screen-side or adapter-side
+compensation was added, so the helper's stdout protocol, the native adapter, preload and
+Reader wheel path all keep one convention. `tests/scroll-anywhere-smoke.mjs` now asserts
+both directions (positive delta advances, negative delta reverses) and counts only the
+helper processes started by its own launched Reader, so an unrelated open Reader window
+no longer makes the check fail.
+
+**Why:** Windows reports wheel-away-from-user as positive while the reader's wheel path
+uses the browser convention where wheel-toward-user is positive. The helper previously
+forwarded the raw Windows value, so an outside-window wheel-down gesture scrolled the
+page up. The original smoke test sent `delta: 120` and asserted downward movement, which
+encoded the inverted convention and hid the defect.
+
+**Result:** `npm run check:code` passed (69 production files, 23 type proofs) and
+`tests/contract.test.mjs` passed all 50 cases. The helper was recompiled by
+`npm run build:helper` (the previous binary was published aside first because a running
+Reader held it open) and `tests/scroll-anywhere-smoke.mjs` passed: one positive notch
+advanced the reader 81 px, one negative notch reversed it, malformed input was rejected,
+the latch survived minimize/restore without changing focus, and nothing was written to
+`reader-preferences.json`. A real outside-window wheel gesture in the portable product is
+still the operator's confirmation step; the automated check covers the helper-to-reader
+direction contract, not the physical mouse.

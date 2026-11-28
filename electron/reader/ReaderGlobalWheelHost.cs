@@ -3,6 +3,10 @@
 // input only while armed, only while the pointer is outside the Reader window, and
 // only when no modifier key is held, so Ctrl+wheel zoom and horizontal input keep
 // their normal meaning. Everything else passes through untouched.
+// Windows reports wheel-away-from-user as a positive delta, while the reader's wheel
+// path uses the browser convention where wheel-toward-user (scroll down) is positive.
+// The sign is converted here, in the mouse hook, so every consumer downstream shares
+// one convention.
 using System;
 using System.Globalization;
 using System.IO;
@@ -341,6 +345,9 @@ internal static class ReaderGlobalWheelHost
         if (inside) return false;
         var delta = unchecked((short)((info.mouseData >> 16) & 0xFFFF));
         if (delta == 0) return false;
+        // Convert the Windows wheel sign to the reader's browser convention: wheel toward
+        // the user (scroll down) becomes positive, so no consumer has to know this rule.
+        var browserDelta = -(int)delta;
         var stamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         long next;
         lock (Gate)
@@ -351,7 +358,7 @@ internal static class ReaderGlobalWheelHost
         Emit(string.Format(
             CultureInfo.InvariantCulture,
             "wheel {0} {1} {2} {3} {4}",
-            delta,
+            browserDelta,
             WheelLines(),
             stamp,
             currentRevision,

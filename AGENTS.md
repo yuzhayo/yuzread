@@ -6,17 +6,17 @@ must not have to retell the project history to each agent.
 
 ## Workspace checkpoint
 
-- **Last documentation update:** 2026-11-28 11:45:25 +07:00
+- **Last documentation update:** 2026-11-28 12:07:14 +07:00
 - **Documented implementation HEAD:**
-  `462b67d4a23e2066ef4272f78d6070b80628776d`
-- **Commit time:** 2026-11-28T09:28:41+07:00
-- **Commit subject:** `feat: add independent Momentum duration setting`
+  `225f279dfdd0e31eb52681df63648e9827430c89`
+- **Commit time:** 2026-11-28T11:48:03+07:00
+- **Commit subject:** `feat: add Scroll Anywhere outside-window wheel capture`
 - **Branch/upstream:** `main` → `origin/main`
 - **Previous baseline:**
-  `2452b0c5c91cd93511b67a8a2614f507281dfd0c`
+  `462b67d4a23e2066ef4272f78d6070b80628776d`
 - **Relationship:** the implementation checkpoint is the last committed baseline
-  before this change. This documentation update accompanies Scroll Anywhere
-  outside-window wheel capture completion.
+  before this change. This documentation update accompanies the Scroll Anywhere
+  wheel-direction correction.
 
 Required preflight:
 
@@ -203,6 +203,9 @@ Do not change these unless the operator requests that exact behavior:
 - Scroll Anywhere captures only ordinary vertical wheel input while the pointer is
   outside the whole Reader window; Ctrl/Shift/Alt/Win-modified wheel, horizontal
   input and injected events keep their normal meaning.
+- Scroll Anywhere wheel direction uses the browser convention (positive delta scrolls
+  down); the Windows-to-browser sign conversion happens inside the mouse hook helper,
+  so every consumer downstream shares one convention.
 - Settings persist as validated overrides; Reset removes the override.
 - Ctrl+wheel zooms and Ctrl+0 returns exactly to 100%.
 - Opening geometry/DPI remains fixed for accepted pages; resize changes the viewport,
@@ -288,6 +291,8 @@ still uses `portable/Yuzread/data/reader/`.
 
 - Operator feel comparison for uncapped Reader pacing remains subjective and unverified.
 - Presented FPS, universal real-book performance and GPU-loss recovery are not certified.
+- Scroll Anywhere is single-window per Windows session: the helper mutex lets only one
+  Reader window capture wheel input at a time; a second window reports unavailable.
 - Library catalog/business behavior is not implemented.
 - Downloader acquisition/business behavior is not implemented.
 - Downloader-to-Library completed-file layout and Library-to-Reader handoff require
