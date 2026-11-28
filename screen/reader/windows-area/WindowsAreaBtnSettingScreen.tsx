@@ -47,6 +47,9 @@ export const partKeys = [
   'smoothReset',
   'smoothSlider',
   'smoothValue',
+  'momentumReset',
+  'momentumSlider',
+  'momentumValue',
 ] as const;
 const headerParts = ['title', 'close'] as const;
 type HeaderPart = (typeof headerParts)[number];
@@ -72,6 +75,8 @@ export interface WindowsAreaSettingScreenConfig extends ResolvedConfig {
 export interface WindowsAreaSettingScreenInput {
   smoothDurationMs: number | null;
   requestSmoothDuration(change: ReaderNumberSettingChange): Promise<Result>;
+  momentumDurationMs: number | null;
+  requestMomentumDuration(change: ReaderNumberSettingChange): Promise<Result>;
   report(issue: DiagnosticIssue): void;
 }
 export function validateConfig(
@@ -139,10 +144,12 @@ export function validateConfig(
   return valid;
 }
 
-// CHILD REGISTRATION — the popup receives only the matching smooth-scroll request/state.
+// CHILD REGISTRATION — the popup receives only the matching duration requests/state.
 interface WindowsAreaSettingScreenPorts {
   setSmoothScrollDuration: RequestPort<ReaderNumberSettingChange, Result>;
   smoothScrollDuration: StatePort<number | null>;
+  setMomentumDuration: RequestPort<ReaderNumberSettingChange, Result>;
+  momentumDuration: StatePort<number | null>;
 }
 const acceptsParentPorts = (value: unknown): value is WindowsAreaSettingScreenPorts =>
   hasRequestPort(
@@ -150,7 +157,15 @@ const acceptsParentPorts = (value: unknown): value is WindowsAreaSettingScreenPo
     'setSmoothScrollDuration',
     'ui.reader.smooth-duration.input',
     'ui.reader.smooth-duration.output',
-  ) && hasStatePort(value, 'smoothScrollDuration', 'ui.reader.smooth-duration.state');
+  ) &&
+  hasStatePort(value, 'smoothScrollDuration', 'ui.reader.smooth-duration.state') &&
+  hasRequestPort(
+    value,
+    'setMomentumDuration',
+    'ui.reader.momentum-duration.input',
+    'ui.reader.momentum-duration.output',
+  ) &&
+  hasStatePort(value, 'momentumDuration', 'ui.reader.momentum-duration.state');
 export const child = defineChild(
   'WindowsArea',
   WindowsAreaBtnSettingScreen,
@@ -160,6 +175,8 @@ export const child = defineChild(
   (ports, report) => ({
     smoothDurationMs: ports.smoothScrollDuration.getSnapshot(),
     requestSmoothDuration: ports.setSmoothScrollDuration.request,
+    momentumDurationMs: ports.momentumDuration.getSnapshot(),
+    requestMomentumDuration: ports.setMomentumDuration.request,
     report,
   }),
 );
@@ -302,12 +319,19 @@ export default function WindowsAreaBtnSettingScreen({
     slider: config.parts.smoothSlider,
     value: config.parts.smoothValue,
   };
+  const momentumControlParts = {
+    reset: config.parts.momentumReset,
+    slider: config.parts.momentumSlider,
+    value: config.parts.momentumValue,
+  };
   const sectionContext = {
     owner: config,
     cardParts,
     controlParts,
     smoothDurationMs: input.smoothDurationMs,
     requestSmoothDuration: input.requestSmoothDuration,
+    momentumDurationMs: input.momentumDurationMs,
+    requestMomentumDuration: input.requestMomentumDuration,
     report: input.report,
   };
 

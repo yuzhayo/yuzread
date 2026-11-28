@@ -6,19 +6,17 @@ must not have to retell the project history to each agent.
 
 ## Workspace checkpoint
 
-- **Last documentation update:** 2026-11-27 20:24:44 +07:00
+- **Last documentation update:** 2026-11-28 09:27:30 +07:00
 - **Documented implementation HEAD:**
-  `7074b05d36d36467c5bfbbd008e73ded35fbc272`
-- **Commit time:** 2026-11-24 23:46:27 +07:00
-- **Commit subject:** `docs: establish workspace agent contract`
+  `2452b0c5c91cd93511b67a8a2614f507281dfd0c`
+- **Commit time:** 2026-11-27 20:26:32 +07:00
+- **Commit subject:** `fix: keep development userData inside the repository`
 - **Branch/upstream:** `main` → `origin/main`
 - **Previous baseline:**
   `df341362dca3e870632cc74c2f12e7cf20255ffd`
 - **Relationship:** the implementation checkpoint is the last committed baseline
-  before this change. This documentation update accompanies the development-state
-  relocation commit. A file cannot contain the hash of the commit that contains
-  itself, so every agent must confirm the actual current HEAD and worktree before
-  changing anything.
+  before this change. This documentation update accompanies momentum duration
+  feature completion.
 
 Required preflight:
 
@@ -199,6 +197,7 @@ Do not change these unless the operator requests that exact behavior:
 - Visible pixels are protected; budget limits are estimates, not RSS/VRAM guarantees.
 - Same-direction mouse-wheel ticks join within 150 ms; the first tick is immediate.
 - Scroll speed remains 1×–10× and Smooth Scroll remains 100–2000 ms, default 250 ms.
+- Momentum duration is 100–2000 ms, default 200 ms, independent of smooth scroll.
 - Settings persist as validated overrides; Reset removes the override.
 - Ctrl+wheel zooms and Ctrl+0 returns exactly to 100%.
 - Opening geometry/DPI remains fixed for accepted pages; resize changes the viewport,
@@ -244,7 +243,7 @@ the **Current unfinished work** section below.
 
 - Strict TypeScript modular Reader with automatic area/child discovery.
 - GPU all-page CBZ rendering, bounded tile residency and joined wheel momentum.
-- Zoom, chapter continuation/navigation, drag/drop and persistent speed/smoothness.
+- Zoom, chapter continuation/navigation, drag/drop and persistent speed/smooth/momentum.
 - Independent Library and Downloader frameless base windows.
 - Distinct process names, icons, app IDs, userData and single-instance locks.
 - Thin Library-default suite launcher and direct role launchers.
@@ -402,7 +401,8 @@ C:\Apps\yuzread\
 │   │   │   ├── WindowsAreaTitle.tsx       Retained disabled title child.
 │   │   │   └── setting-screen\
 │   │   │       ├── WindowsAreaBtnSettingScreenSections.ts Discovers local settings sections.
-│   │   │       └── WindowsAreaBtnSettingScreenSectionSmoothScroll.tsx Smooth-scroll setting.
+│   │   │       ├── WindowsAreaBtnSettingScreenSectionSmoothScroll.tsx Smooth-scroll setting.
+│   │   │       └── WindowsAreaBtnSettingScreenSectionMomentumDuration.tsx Momentum duration setting.
 │   │   ├── body\
 │   │   │   ├── Body.tsx                   Reader-body parent: placement and relay only.
 │   │   │   ├── BodyContract.ts            Reader-body request/state contracts.

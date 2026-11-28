@@ -26,6 +26,7 @@ import * as Load from '../screen/reader/windows-area/WindowsAreaBtnLoad.tsx';
 import * as Speed from '../screen/reader/windows-area/WindowsAreaBtnScrollSpeed.tsx';
 import * as SettingScreen from '../screen/reader/windows-area/WindowsAreaBtnSettingScreen.tsx';
 import * as SmoothSection from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSectionSmoothScroll.tsx';
+import * as MomentumSection from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSectionMomentumDuration.tsx';
 import { discoverSettingSections } from '../screen/reader/windows-area/setting-screen/WindowsAreaBtnSettingScreenSections.ts';
 import * as Close from '../screen/reader/windows-area/WindowsAreaBtnClose.tsx';
 import * as DefaultSize from '../screen/reader/windows-area/WindowsAreaBtnDefaultSize.tsx';
@@ -145,7 +146,7 @@ test('schema and real area roots preserve enabled area ownership', () => {
     plan.areas.map((a) => a.config.id),
     ['windowsBar', 'body', 'bottomBar'],
   );
-  assert.equal(plan.connections.length, 24);
+  assert.equal(plan.connections.length, 26);
   assert.equal(plan.areas[0].config.parentName, 'WindowsArea');
 });
 test('setting screen config validates icons, header parts and dimensions without moving existing controls', () => {
@@ -200,8 +201,8 @@ test('setting screen config validates icons, header parts and dimensions without
   assert.equal(group(source).bounds.x, 89.75);
 });
 test('setting screen sections self-declare shared-card bodies without duplicate identities', () => {
-  const sections = discoverSettingSections({ SmoothSection });
-  assert.deepEqual([...sections.keys()], ['reader.smoothScroll']);
+  const sections = discoverSettingSections({ SmoothSection, MomentumSection });
+  assert.deepEqual([...sections.keys()], ['reader.smoothScroll', 'reader.momentumDuration']);
   const config = nodes(source, 'windowsBar').find(
     (node) => node.config?.id === 'settingScreen',
   ).config;

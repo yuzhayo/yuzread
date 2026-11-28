@@ -260,6 +260,21 @@ export const createBodyPorts = () => ({
     ),
     null,
   ),
+  setMomentumDuration: createRequest(
+    contract('ui.reader.momentum-duration.input', (v: unknown): v is ReaderNumberSettingChange =>
+      settingChange(v, 100, 2000),
+    ),
+    contract('ui.reader.momentum-duration.output', result),
+    { ok: false, error: 'Reader momentum duration is unavailable' },
+  ),
+  momentumDuration: createState(
+    contract(
+      'ui.reader.momentum-duration.state',
+      (v: unknown): v is number | null =>
+        v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 100 && v <= 2000),
+    ),
+    null,
+  ),
   readerPreferences: createState(contract('native.reader.preferences.state', preferences), null),
   saveReaderPreference: createRequest(
     contract(

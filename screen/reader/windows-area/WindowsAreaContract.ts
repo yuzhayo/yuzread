@@ -73,6 +73,25 @@ export const createWindowsAreaPorts = () => ({
     ),
     null,
   ),
+  setMomentumDuration: createRequest(
+    contract('ui.reader.momentum-duration.input', (v: unknown): v is ReaderNumberSettingChange =>
+      settingChange(v, 100, 2000),
+    ),
+    contract(
+      'ui.reader.momentum-duration.output',
+      (v: unknown): v is Result =>
+        isObject(v) && (v.ok === true || (v.ok === false && typeof v.error === 'string')),
+    ),
+    { ok: false, error: 'Reader momentum duration is unavailable' },
+  ),
+  momentumDuration: createState(
+    contract(
+      'ui.reader.momentum-duration.state',
+      (v: unknown): v is number | null =>
+        v === null || (typeof v === 'number' && Number.isInteger(v) && v >= 100 && v <= 2000),
+    ),
+    null,
+  ),
   open: createRequest(
     contract(
       'ui.open.input.v2',

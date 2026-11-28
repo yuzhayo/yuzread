@@ -55,6 +55,7 @@ export function appendWheelTick(
   speed = 1,
   windowMs: number,
   smoothDurationMs: number,
+  momentumDurationMs: number,
 ) {
   if (!Number.isFinite(distance) || !distance || !Number.isFinite(time)) return state;
   const duration = Math.max(0.1, Math.min(2, smoothDurationMs / 1000));
@@ -62,14 +63,17 @@ export function appendWheelTick(
     sameDirection = direction === Math.sign(state.rate);
   const gap = state.lastTick === null ? Infinity : Math.max(0, time - state.lastTick);
   const joined = sameDirection && gap <= windowMs;
+  const expired =
+    state.lastTick !== null &&
+    gap > Math.max(100, Math.min(2000, momentumDurationMs ?? smoothDurationMs));
   const sample = clampMomentum((distance * GAIN) / Math.max(0.016, gap / 1000), speed);
   const rate = joined
     ? state.rate + (sample - state.rate) * 0.5
     : clampMomentum((distance * GAIN) / duration, speed);
   return {
-    velocity: clampMomentum(state.velocity, speed),
+    velocity: expired ? 0 : clampMomentum(state.velocity, speed),
     remaining: creditLimit(
-      (sameDirection ? state.remaining : 0) + distance * GAIN,
+      expired ? distance * GAIN : (sameDirection ? state.remaining : 0) + distance * GAIN,
       speed,
       duration,
     ),
@@ -93,12 +97,12 @@ export function scaleWheelGesture(
 }
 export function scaleWheelDuration(
   state: WheelGesture,
-  previousMs: number,
-  nextMs: number,
+  previousSmoothMs: number,
+  nextSmoothMs: number,
   speed = 1,
 ): WheelGesture {
-  const previous = Math.max(0.1, Math.min(2, previousMs / 1000)),
-    next = Math.max(0.1, Math.min(2, nextMs / 1000)),
+  const previous = Math.max(0.1, Math.min(2, previousSmoothMs / 1000)),
+    next = Math.max(0.1, Math.min(2, nextSmoothMs / 1000)),
     factor = previous / next;
   return {
     ...state,
@@ -114,9 +118,13 @@ export function advanceWheelGesture(
   speed = 1,
   windowMs: number,
   smoothDurationMs: number,
+  momentumDurationMs: number,
 ) {
   speed = validSpeed(speed);
   const duration = Math.max(0.1, Math.min(2, smoothDurationMs / 1000));
+  // Momentum only paces the stopping tail: the same remaining credit is spread over the
+  // configured window, so a shorter setting stops sooner without changing total travel.
+  const coast = Math.max(0.1, Math.min(2, (momentumDurationMs ?? smoothDurationMs) / 1000));
   const seconds = Number.isFinite(elapsed) ? Math.max(0, Math.min(0.05, elapsed)) : 0;
   let velocity = clampMomentum(state.velocity, speed),
     remaining = creditLimit(state.remaining, speed, duration),
@@ -129,7 +137,7 @@ export function advanceWheelGesture(
     const direction = Math.sign(remaining);
     const target = joined
       ? direction * Math.min(Math.abs(state.rate), Math.abs(remaining) / (duration * 0.8))
-      : remaining / duration;
+      : remaining / coast;
     // Opposing input brakes promptly; same-direction changes blend over 40 ms.
     const response = velocity * target < 0 ? 0.02 : 0.04;
     const decay = Math.exp(-step / response);

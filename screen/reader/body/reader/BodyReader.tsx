@@ -56,6 +56,10 @@ export interface BodyReaderInput {
     handler: (change: ReaderNumberSettingChange) => Result | Promise<Result>,
   ): () => void;
   publishSmoothScrollDuration(durationMs: number): void;
+  registerMomentumDuration(
+    handler: (change: ReaderNumberSettingChange) => Result | Promise<Result>,
+  ): () => void;
+  publishMomentumDuration(durationMs: number): void;
   preferences: ReaderPreferenceSnapshot | null;
   persistPreference(update: ReaderPreferenceUpdate): Promise<Result>;
   registerNavigation(handler: (request: ReaderNavigationRequest) => Promise<Result>): () => void;
@@ -346,6 +350,13 @@ const acceptsParentPorts = (value: unknown): value is BodyPorts =>
     'ui.reader.smooth-duration.output',
   ) &&
   hasStatePort(value, 'smoothScrollDuration', 'ui.reader.smooth-duration.state') &&
+  hasRequestPort(
+    value,
+    'setMomentumDuration',
+    'ui.reader.momentum-duration.input',
+    'ui.reader.momentum-duration.output',
+  ) &&
+  hasStatePort(value, 'momentumDuration', 'ui.reader.momentum-duration.state') &&
   hasStatePort(value, 'readerPreferences', 'native.reader.preferences.state') &&
   hasRequestPort(
     value,
@@ -406,6 +417,8 @@ export const child = defineChild(
     publishScrollSpeed: ports.scrollSpeed.publish,
     registerSmoothScrollDuration: ports.setSmoothScrollDuration.register,
     publishSmoothScrollDuration: ports.smoothScrollDuration.publish,
+    registerMomentumDuration: ports.setMomentumDuration.register,
+    publishMomentumDuration: ports.momentumDuration.publish,
     preferences: ports.readerPreferences.getSnapshot(),
     persistPreference: ports.saveReaderPreference.request,
     registerNavigation: ports.navigateChapter.register,
@@ -949,9 +962,11 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     cancelZoom = useRef<(() => void) | null>(null);
   const surface = useRef<ReturnType<typeof attachReaderPixi> | null>(null);
   const configuredSpeed = input.preferences?.values.scrollSpeed,
-    configuredSmoothDuration = input.preferences?.values.smoothScrollDurationMs;
+    configuredSmoothDuration = input.preferences?.values.smoothScrollDurationMs,
+    configuredMomentumDuration = input.preferences?.values.momentumDurationMs;
   const scrollSpeedSetting = useRef<number | null>(null),
-    smoothDuration = useRef<number | null>(null);
+    smoothDuration = useRef<number | null>(null),
+    momentumDuration = useRef<number | null>(null);
   if (scrollSpeedSetting.current === null && finite(configuredSpeed, 1, 100))
     scrollSpeedSetting.current = configuredSpeed;
   if (
@@ -960,6 +975,12 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     finite(configuredSmoothDuration, 100, 2000)
   )
     smoothDuration.current = configuredSmoothDuration;
+  if (
+    momentumDuration.current === null &&
+    Number.isInteger(configuredMomentumDuration) &&
+    finite(configuredMomentumDuration, 100, 2000)
+  )
+    momentumDuration.current = configuredMomentumDuration;
   const host = useMemo(
     () => ({
       open: input.openArchive,
@@ -2320,8 +2341,10 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
   useEffect(() => {
     const view = viewport.current;
     const speedSetting = scrollSpeedSetting.current,
-      durationMs = smoothDuration.current;
-    if (!view || speedSetting === null || durationMs === null) return undefined;
+      durationMs = smoothDuration.current,
+      momentumMs = momentumDuration.current;
+    if (!view || speedSetting === null || durationMs === null || momentumMs === null)
+      return undefined;
     try {
       const renderer = attachReaderPixi(view, {
         gpu: config.renderer !== 'dom',
@@ -2331,6 +2354,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
         tileMemoryMB: config.tileMemoryMB ?? 128,
         tickWindowMs: config.momentum?.tickWindowMs ?? 150,
         smoothDurationMs: durationMs,
+        momentumDurationMs: momentumMs,
         maxDecodedMB: config.maxDecodedMB,
         getDocumentId: () => reading.current?.sceneId ?? '',
         getPages: () =>
@@ -2379,6 +2403,7 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     config.maxDecodedMB,
     configuredSpeed,
     configuredSmoothDuration,
+    configuredMomentumDuration,
     input.reserveRender,
   ]);
 
@@ -2436,6 +2461,34 @@ export default function BodyReader({ config, input }: ChildProps<ReaderConfig, B
     configuredSmoothDuration,
     input.registerSmoothScrollDuration,
     input.publishSmoothScrollDuration,
+    input.persistPreference,
+  ]);
+  useEffect(() => {
+    const initial = momentumDuration.current;
+    if (initial === null) return undefined;
+    input.publishMomentumDuration(initial);
+    return input.registerMomentumDuration(async (change) => {
+      if (!Number.isInteger(change.value) || !finite(change.value, 100, 2000))
+        return { ok: false, error: 'Momentum duration must be 100–2000 ms' };
+      const previous = momentumDuration.current;
+      momentumDuration.current = change.value;
+      surface.current?.setMomentumDuration(change.value);
+      input.publishMomentumDuration(change.value);
+      const saved = await input.persistPreference({
+        id: 'momentumDurationMs',
+        value: change.reset ? null : change.value,
+      });
+      if (!saved.ok && momentumDuration.current === change.value && previous !== null) {
+        momentumDuration.current = previous;
+        surface.current?.setMomentumDuration(previous);
+        input.publishMomentumDuration(previous);
+      }
+      return saved;
+    });
+  }, [
+    configuredMomentumDuration,
+    input.registerMomentumDuration,
+    input.publishMomentumDuration,
     input.persistPreference,
   ]);
   const status = display.error

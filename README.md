@@ -132,3 +132,27 @@ while writing fresh Electron state (`lockfile`, `blob_storage`, `DIPS-wal`) into
 `.runtime\dev-userdata\Yuzread`; the old `%APPDATA%\Yuzread` path was not recreated
 and both Reader JSON files retained their values. The test process was closed
 gracefully. Portable daily-use state at `portable\Yuzread\data\reader\` was untouched.
+
+## 2026-11-28 — Separate Momentum duration setting
+
+**Summary:** Reader gained an independent Momentum duration card in Setting Screen that
+controls how long wheel movement continues after the last input, separately from Smooth
+scroll.
+
+**Done:** Added a `momentumDurationMs` validated preference (100–2000 ms, step 10, default
+200 ms) with its own Setting Screen section card, live apply, persistence and Reset.
+Threaded the value through the body contract, Windows Area ports, Reader body effect,
+Pixi surface and worker policy. The worker now spreads the remaining wheel credit across
+the configured momentum window, so a shorter setting stops sooner without changing the
+total distance one wheel notch scrolls.
+
+**Why:** The operator wanted stopping feel to be tunable on its own; Smooth scroll already
+controls how softly input is absorbed, so coupling both behaviours in one slider left no
+way to shorten or lengthen the tail without also changing the smoothness.
+
+**Result:** `npm run check:code` passed (66 production files, strict types, formatting and
+contract checks) and `tests/contract.test.mjs` passed all 49 cases, including wheel travel,
+reversal, smooth-duration pacing and section discovery. Measured travel stays at 3600 px
+for twenty 100 ms-spaced notches at 200 ms momentum and above; a single notch still stops
+inside its configured window. Scroll Anywhere outside-window capture was not delivered in
+this entry and remains unfinished work.

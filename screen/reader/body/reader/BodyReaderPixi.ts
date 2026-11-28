@@ -20,6 +20,7 @@ export interface ReaderPixiOptions {
   tileMemoryMB: number;
   tickWindowMs: number;
   smoothDurationMs: number;
+  momentumDurationMs: number;
   maxDecodedMB: number;
   getDocumentId(): string;
   getPages(): ReaderRenderPage[];
@@ -146,9 +147,11 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     control = 0,
     requestId = 0;
   let speed = options.speed,
-    smoothDurationMs = options.smoothDurationMs;
+    smoothDurationMs = options.smoothDurationMs,
+    momentumDurationMs = options.momentumDurationMs;
   view.dataset.scrollSpeed = String(speed);
   view.dataset.smoothScrollDuration = String(smoothDurationMs);
+  view.dataset.momentumDuration = String(momentumDurationMs);
   let baselineTop = view.scrollTop,
     documentId = '',
     layoutFrame: number | null = null;
@@ -296,6 +299,25 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     post({ version: 1, kind: 'view', view: measure() });
   }
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
+  // Shared camera advance for wheel input from this window and the global hook helper.
+  function advanceWheel(distance: number, time: number) {
+    if (!initialized || !options.canScroll()) return;
+    options.onMotion();
+    if (reduced.matches || !options.momentum) {
+      stop();
+      view.scrollTop += distance;
+      scroll();
+      return;
+    }
+    post({
+      version: 1,
+      kind: 'wheel',
+      control: ++control,
+      distance,
+      time,
+      maxY: Math.max(0, view.scrollHeight - view.clientHeight),
+    });
+  }
   function wheel(event: WheelEvent) {
     if (event.ctrlKey) {
       stop();
@@ -334,21 +356,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
     }
     event.preventDefault();
     event.stopPropagation();
-    options.onMotion();
-    if (reduced.matches || !options.momentum) {
-      stop();
-      view.scrollTop += distance;
-      scroll();
-      return;
-    }
-    post({
-      version: 1,
-      kind: 'wheel',
-      control: ++control,
-      distance,
-      time: performance.timeOrigin + event.timeStamp,
-      maxY: Math.max(0, view.scrollHeight - view.clientHeight),
-    });
+    advanceWheel(distance, performance.timeOrigin + event.timeStamp);
   }
   const key = (event: KeyboardEvent) => {
     if (!(event.target instanceof Node) || !root.contains(event.target)) return;
@@ -550,6 +558,7 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       tileMemoryMB: options.tileMemoryMB,
       tickWindowMs: options.tickWindowMs,
       smoothDurationMs,
+      momentumDurationMs,
     },
     offscreen ? [offscreen] : [],
   );
@@ -601,6 +610,25 @@ export function attachReaderPixi(view: HTMLDivElement, options: ReaderPixiOption
       post({
         version: 1,
         kind: 'smooth-duration',
+        control: ++control,
+        durationMs: next,
+        maxY: Math.max(0, view.scrollHeight - view.clientHeight),
+      });
+    },
+    setMomentumDuration(next: number) {
+      if (
+        closed ||
+        !Number.isInteger(next) ||
+        next < 100 ||
+        next > 2000 ||
+        next === momentumDurationMs
+      )
+        return;
+      momentumDurationMs = next;
+      view.dataset.momentumDuration = String(next);
+      post({
+        version: 1,
+        kind: 'momentum-duration',
         control: ++control,
         durationMs: next,
         maxY: Math.max(0, view.scrollHeight - view.clientHeight),

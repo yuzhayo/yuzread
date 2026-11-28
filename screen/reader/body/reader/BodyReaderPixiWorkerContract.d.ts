@@ -35,6 +35,7 @@ export type PixiInput =
       tileMemoryMB: number;
       tickWindowMs: number;
       smoothDurationMs: number;
+      momentumDurationMs: number;
     }
   | { version: 1; kind: 'layout'; view: PixiView; pages: PixiPageBox[] }
   | { version: 1; kind: 'view'; view: PixiView }
@@ -54,6 +55,13 @@ export type PixiInput =
   | {
       version: 1;
       kind: 'smooth-duration';
+      control: number;
+      durationMs: number;
+      maxY: number;
+    }
+  | {
+      version: 1;
+      kind: 'momentum-duration';
       control: number;
       durationMs: number;
       maxY: number;

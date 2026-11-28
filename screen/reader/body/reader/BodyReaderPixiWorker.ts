@@ -138,7 +138,9 @@ function validInput(v: unknown): v is PixiInput {
         finite(v.tickWindowMs, 50, 300) &&
         Number.isInteger(v.tickWindowMs) &&
         finite(v.smoothDurationMs, 100, 2000) &&
-        Number.isInteger(v.smoothDurationMs)
+        Number.isInteger(v.smoothDurationMs) &&
+        finite(v.momentumDurationMs, 100, 2000) &&
+        Number.isInteger(v.momentumDurationMs)
       );
     case 'layout':
       return (
@@ -173,6 +175,13 @@ function validInput(v: unknown): v is PixiInput {
     case 'speed':
       return integer(v.control) && finite(v.speed, 0.1, 10) && finite(v.maxY, 0);
     case 'smooth-duration':
+      return (
+        integer(v.control) &&
+        finite(v.durationMs, 100, 2000) &&
+        Number.isInteger(v.durationMs) &&
+        finite(v.maxY, 0)
+      );
+    case 'momentum-duration':
       return (
         integer(v.control) &&
         finite(v.durationMs, 100, 2000) &&
@@ -370,7 +379,8 @@ let y = 0,
   control = 0;
 let gesture = createWheelGesture(),
   tickWindowMs = 150,
-  smoothDurationMs = 0;
+  smoothDurationMs = 0,
+  momentumDurationMs = 0;
 let frame: number | null = null,
   lastTime: number | null = null,
   serial = 0,
@@ -461,6 +471,7 @@ function tick(time: number) {
       speed,
       tickWindowMs,
       smoothDurationMs,
+      momentumDurationMs,
     );
     const desired = y + next.distance;
     let nextY = Math.max(0, Math.min(maxY, desired));
@@ -1191,6 +1202,7 @@ async function initialize(message: Extract<PixiInput, { kind: 'init' }>) {
   tileLimit = message.tileMemoryMB * MB;
   tickWindowMs = message.tickWindowMs;
   smoothDurationMs = message.smoothDurationMs;
+  momentumDurationMs = message.momentumDurationMs;
   y = view.y;
   maxY = view.maxY;
   control = view.control;
@@ -1379,6 +1391,7 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
         speed,
         tickWindowMs,
         smoothDurationMs,
+        momentumDurationMs,
       );
       velocity = gesture.velocity;
       lastTime ??= performance.now();
@@ -1393,6 +1406,11 @@ self.addEventListener('message', (event: MessageEvent<unknown>) => {
     } else if (message.kind === 'smooth-duration') {
       gesture = scaleWheelDuration(gesture, smoothDurationMs, message.durationMs, speed);
       smoothDurationMs = message.durationMs;
+      velocity = gesture.velocity;
+      positionDirty = true;
+      schedule();
+    } else if (message.kind === 'momentum-duration') {
+      momentumDurationMs = message.durationMs;
       velocity = gesture.velocity;
       positionDirty = true;
       schedule();

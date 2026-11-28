@@ -1,6 +1,9 @@
 {
   "schemaVersion": 2,
-  "status": { "ready": "Ready", "issues": "Configuration issues" },
+  "status": {
+    "ready": "Ready",
+    "issues": "Configuration issues"
+  },
   "presets": {
     "base": {
       "colors": {
@@ -27,7 +30,10 @@
         "iconWidth": 36,
         "iconHeight": 44
       },
-      "typography": { "family": "\"Segoe UI\", system-ui, sans-serif", "weight": 400 },
+      "typography": {
+        "family": "\"Segoe UI\", system-ui, sans-serif",
+        "weight": 400
+      },
       "content": {
         "horizontalAlign": "flex-start",
         "verticalAlign": "center",
@@ -38,73 +44,167 @@
     },
     "titleBar": {
       "preset": "base",
-      "colors": { "background": "#161d27", "border": "#263140" },
-      "geometry": { "borderWidth": 1 }
+      "colors": {
+        "background": "#161d27",
+        "border": "#263140"
+      },
+      "geometry": {
+        "borderWidth": 1
+      }
     },
     "actionBar": {
       "preset": "base",
-      "colors": { "background": "#121923", "border": "#202b39" },
-      "geometry": { "borderWidth": 1 }
+      "colors": {
+        "background": "#121923",
+        "border": "#202b39"
+      },
+      "geometry": {
+        "borderWidth": 1
+      }
     },
-    "workspace": { "preset": "base", "colors": { "background": "#0f131a" } },
+    "workspace": {
+      "preset": "base",
+      "colors": {
+        "background": "#0f131a"
+      }
+    },
     "bottomBar": {
       "preset": "base",
-      "colors": { "background": "#121923", "border": "#202b39" },
-      "geometry": { "borderWidth": 1 }
+      "colors": {
+        "background": "#121923",
+        "border": "#202b39"
+      },
+      "geometry": {
+        "borderWidth": 1
+      }
     },
     "title": {
       "preset": "base",
-      "typography": { "weight": 600 },
-      "geometry": { "letterSpacing": 0.3 }
+      "typography": {
+        "weight": 600
+      },
+      "geometry": {
+        "letterSpacing": 0.3
+      }
     },
     "captionButton": {
       "preset": "base",
-      "geometry": { "radius": 5 },
-      "content": { "horizontalAlign": "center" },
+      "geometry": {
+        "radius": 5
+      },
+      "content": {
+        "horizontalAlign": "center"
+      },
       "states": {
-        "hover": { "colors": { "background": "#2a3545", "foreground": "#ffffff" } },
-        "active": { "colors": { "background": "#34445a" } },
-        "focusVisible": {
-          "colors": { "outline": "#8eb8fb" },
-          "geometry": { "outlineWidth": 2, "outlineOffset": -2 }
+        "hover": {
+          "colors": {
+            "background": "#2a3545",
+            "foreground": "#ffffff"
+          }
         },
-        "disabled": { "colors": { "foreground": "#697788" }, "geometry": { "opacity": 0.5 } }
+        "active": {
+          "colors": {
+            "background": "#34445a"
+          }
+        },
+        "focusVisible": {
+          "colors": {
+            "outline": "#8eb8fb"
+          },
+          "geometry": {
+            "outlineWidth": 2,
+            "outlineOffset": -2
+          }
+        },
+        "disabled": {
+          "colors": {
+            "foreground": "#697788"
+          },
+          "geometry": {
+            "opacity": 0.5
+          }
+        }
       }
     },
     "closeButton": {
       "preset": "captionButton",
       "states": {
-        "hover": { "colors": { "background": "#b82c40", "foreground": "#ffffff" } },
-        "active": { "colors": { "background": "#942236" } }
+        "hover": {
+          "colors": {
+            "background": "#b82c40",
+            "foreground": "#ffffff"
+          }
+        },
+        "active": {
+          "colors": {
+            "background": "#942236"
+          }
+        }
       }
     },
     "status": {
       "preset": "base",
-      "colors": { "foreground": "#8c9daf" },
-      "geometry": { "fontSize": 12 },
-      "content": { "whiteSpace": "normal" },
-      "states": { "error": { "colors": { "foreground": "#f2bf83" } } }
+      "colors": {
+        "foreground": "#8c9daf"
+      },
+      "geometry": {
+        "fontSize": 12
+      },
+      "content": {
+        "whiteSpace": "normal"
+      },
+      "states": {
+        "error": {
+          "colors": {
+            "foreground": "#f2bf83"
+          }
+        }
+      }
     },
     "inspectionLabel": {
       "preset": "base",
-      "colors": { "background": "#212e49", "foreground": "#c6d9ff" },
-      "geometry": { "fontSize": 10, "paddingX": 1 },
-      "content": { "whiteSpace": "normal", "verticalAlign": "flex-start" }
+      "colors": {
+        "background": "#212e49",
+        "foreground": "#c6d9ff"
+      },
+      "geometry": {
+        "fontSize": 10,
+        "paddingX": 1
+      },
+      "content": {
+        "whiteSpace": "normal",
+        "verticalAlign": "flex-start"
+      }
     },
     "readerOverlay": {
       "preset": "base",
-      "colors": { "background": "transparent" },
-      "content": { "horizontalAlign": "center" }
+      "colors": {
+        "background": "transparent"
+      },
+      "content": {
+        "horizontalAlign": "center"
+      }
     },
     "readerStatus": {
       "preset": "status",
-      "colors": { "background": "#161d27" },
-      "geometry": { "paddingX": 1, "paddingY": 1 },
-      "content": { "whiteSpace": "nowrap", "horizontalAlign": "center" }
+      "colors": {
+        "background": "#161d27"
+      },
+      "geometry": {
+        "paddingX": 1,
+        "paddingY": 1
+      },
+      "content": {
+        "whiteSpace": "nowrap",
+        "horizontalAlign": "center"
+      }
     },
     "speedPanel": {
       "preset": "base",
-      "colors": { "background": "#161d27", "border": "#45546a" },
+      "colors": {
+        "background": "#161d27",
+        "border": "#45546a"
+      },
       "geometry": {
         "radius": 8,
         "borderWidth": 1,
@@ -113,49 +213,118 @@
         "shadow": "0 8px 24px #0008"
       }
     },
-    "speedHeader": { "preset": "base", "typography": { "weight": 600 } },
+    "speedHeader": {
+      "preset": "base",
+      "typography": {
+        "weight": 600
+      }
+    },
     "sectionCard": {
       "preset": "base",
-      "colors": { "background": "#1d252f", "foreground": "#e4e9ef", "border": "#43505f" },
-      "geometry": { "radius": 6, "borderWidth": 1 },
-      "content": { "verticalAlign": "flex-start", "horizontalAlign": "flex-start" }
+      "colors": {
+        "background": "#1d252f",
+        "foreground": "#e4e9ef",
+        "border": "#43505f"
+      },
+      "geometry": {
+        "radius": 6,
+        "borderWidth": 1
+      },
+      "content": {
+        "verticalAlign": "flex-start",
+        "horizontalAlign": "flex-start"
+      }
     },
     "sectionCardHeader": {
       "preset": "base",
-      "colors": { "background": "transparent", "foreground": "#e4e9ef" },
-      "geometry": { "paddingX": 2, "paddingY": 5, "radius": 0, "borderWidth": 0, "fontSize": 13 },
-      "content": { "verticalAlign": "center", "horizontalAlign": "flex-end" },
-      "states": { "hover": { "colors": { "background": "#263141" } } }
+      "colors": {
+        "background": "transparent",
+        "foreground": "#e4e9ef"
+      },
+      "geometry": {
+        "paddingX": 2,
+        "paddingY": 5,
+        "radius": 0,
+        "borderWidth": 0,
+        "fontSize": 13
+      },
+      "content": {
+        "verticalAlign": "center",
+        "horizontalAlign": "flex-end"
+      },
+      "states": {
+        "hover": {
+          "colors": {
+            "background": "#263141"
+          }
+        }
+      }
     },
     "sectionCardBody": {
       "preset": "base",
-      "colors": { "background": "#171c22", "foreground": "#e4e9ef" },
-      "geometry": { "paddingX": 2, "paddingY": 6, "radius": 4, "borderWidth": 0 },
-      "content": { "verticalAlign": "flex-start", "horizontalAlign": "flex-start" }
+      "colors": {
+        "background": "#171c22",
+        "foreground": "#e4e9ef"
+      },
+      "geometry": {
+        "paddingX": 2,
+        "paddingY": 6,
+        "radius": 4,
+        "borderWidth": 0
+      },
+      "content": {
+        "verticalAlign": "flex-start",
+        "horizontalAlign": "flex-start"
+      }
     },
     "speedControl": {
       "preset": "captionButton",
-      "colors": { "background": "#2a3545", "border": "#45546a" },
-      "geometry": { "borderWidth": 1, "paddingX": 3 }
+      "colors": {
+        "background": "#2a3545",
+        "border": "#45546a"
+      },
+      "geometry": {
+        "borderWidth": 1,
+        "paddingX": 3
+      }
     },
     "speedSlider": {
       "preset": "base",
-      "colors": { "foreground": "#8eb8fb" },
-      "content": { "overflow": "visible" }
+      "colors": {
+        "foreground": "#8eb8fb"
+      },
+      "content": {
+        "overflow": "visible"
+      }
     },
     "speedValue": {
       "preset": "base",
-      "colors": { "background": "#121923", "border": "#45546a" },
-      "geometry": { "radius": 5 }
+      "colors": {
+        "background": "#121923",
+        "border": "#45546a"
+      },
+      "geometry": {
+        "radius": 5
+      }
     },
     "chapterItem": {
       "preset": "captionButton",
-      "geometry": { "radius": 3, "paddingX": 3 },
-      "content": { "horizontalAlign": "flex-start" },
+      "geometry": {
+        "radius": 3,
+        "paddingX": 3
+      },
+      "content": {
+        "horizontalAlign": "flex-start"
+      },
       "states": {
         "active": {
-          "colors": { "background": "#34445a", "foreground": "#ffffff" },
-          "typography": { "weight": 600 }
+          "colors": {
+            "background": "#34445a",
+            "foreground": "#ffffff"
+          },
+          "typography": {
+            "weight": 600
+          }
         }
       }
     }
@@ -170,7 +339,12 @@
       "draggable": true,
       "overlay": true,
       "zIndex": 10,
-      "bounds": { "x": 0, "y": 0, "width": 100, "height": 4 },
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 4
+      },
       "preset": "base",
       "hoverPreset": "titleBar",
       "children": [
@@ -180,9 +354,16 @@
           "parentId": "windowsBar",
           "label": "Setting Screen",
           "enabled": true,
-          "bounds": { "x": 0.75, "y": 8, "width": 4.5, "height": 84 },
+          "bounds": {
+            "x": 0.75,
+            "y": 8,
+            "width": 4.5,
+            "height": 84
+          },
           "preset": "captionButton",
-          "interaction": { "dragRegion": "no-drag" },
+          "interaction": {
+            "dragRegion": "no-drag"
+          },
           "icon": "settings",
           "closeIcon": "close",
           "order": ["title", "close"],
@@ -217,11 +398,41 @@
               "order": ["reset", "slider", "value"],
               "gap": 3,
               "rowHeight": 38,
-              "slider": { "thumbSize": 14, "trackSize": 3 },
+              "slider": {
+                "thumbSize": 14,
+                "trackSize": 3
+              },
               "labels": {
                 "reset": "Reset",
                 "slider": "Smooth-scroll duration",
                 "value": "Smooth-scroll duration value",
+                "unit": "ms"
+              }
+            },
+            {
+              "id": "momentumDuration",
+              "componentId": "reader.momentumDuration",
+              "label": "Momentum",
+              "expanded": true,
+              "preference": {
+                "id": "momentumDurationMs",
+                "kind": "number",
+                "default": 200,
+                "min": 100,
+                "max": 2000,
+                "step": 10
+              },
+              "order": ["reset", "slider", "value"],
+              "gap": 3,
+              "rowHeight": 38,
+              "slider": {
+                "thumbSize": 14,
+                "trackSize": 3
+              },
+              "labels": {
+                "reset": "Reset",
+                "slider": "Momentum duration",
+                "value": "Momentum duration value",
                 "unit": "ms"
               }
             }
@@ -229,26 +440,110 @@
           "parts": {
             "panel": {
               "preset": "speedPanel",
-              "size": { "width": 100, "height": 100 },
-              "geometry": { "paddingX": 1.8, "paddingY": 1.5 }
+              "size": {
+                "width": 100,
+                "height": 100
+              },
+              "geometry": {
+                "paddingX": 1.8,
+                "paddingY": 1.5
+              }
             },
-            "header": { "preset": "base", "size": { "width": 100, "height": 100 } },
-            "title": { "preset": "speedHeader", "size": { "width": 85, "height": 100 } },
+            "header": {
+              "preset": "base",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "title": {
+              "preset": "speedHeader",
+              "size": {
+                "width": 85,
+                "height": 100
+              }
+            },
             "close": {
               "preset": "closeButton",
-              "size": { "width": 12, "height": 100 },
-              "geometry": { "iconWidth": 40, "iconHeight": 70 }
+              "size": {
+                "width": 12,
+                "height": 100
+              },
+              "geometry": {
+                "iconWidth": 40,
+                "iconHeight": 70
+              }
             },
-            "body": { "preset": "base", "size": { "width": 100, "height": 100 } },
-            "card": { "preset": "sectionCard", "size": { "width": 100, "height": 100 } },
+            "body": {
+              "preset": "base",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "card": {
+              "preset": "sectionCard",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
             "cardHeader": {
               "preset": "sectionCardHeader",
-              "size": { "width": 100, "height": 100 }
+              "size": {
+                "width": 100,
+                "height": 100
+              }
             },
-            "cardBody": { "preset": "sectionCardBody", "size": { "width": 100, "height": 100 } },
-            "smoothReset": { "preset": "speedControl", "size": { "width": 22, "height": 100 } },
-            "smoothSlider": { "preset": "speedSlider", "size": { "width": 54, "height": 100 } },
-            "smoothValue": { "preset": "speedValue", "size": { "width": 18, "height": 100 } }
+            "cardBody": {
+              "preset": "sectionCardBody",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "smoothReset": {
+              "preset": "speedControl",
+              "size": {
+                "width": 22,
+                "height": 100
+              }
+            },
+            "smoothSlider": {
+              "preset": "speedSlider",
+              "size": {
+                "width": 54,
+                "height": 100
+              }
+            },
+            "smoothValue": {
+              "preset": "speedValue",
+              "size": {
+                "width": 18,
+                "height": 100
+              }
+            },
+            "momentumReset": {
+              "preset": "speedControl",
+              "size": {
+                "width": 22,
+                "height": 100
+              }
+            },
+            "momentumSlider": {
+              "preset": "speedSlider",
+              "size": {
+                "width": 54,
+                "height": 100
+              }
+            },
+            "momentumValue": {
+              "preset": "speedValue",
+              "size": {
+                "width": 18,
+                "height": 100
+              }
+            }
           }
         },
         {
@@ -257,7 +552,12 @@
           "parentId": "windowsBar",
           "label": "Scroll speed",
           "enabled": true,
-          "bounds": { "x": 80.25, "y": 8, "width": 4.5, "height": 84 },
+          "bounds": {
+            "x": 80.25,
+            "y": 8,
+            "width": 4.5,
+            "height": 84
+          },
           "preset": "captionButton",
           "icon": "speed",
           "preference": {
@@ -279,7 +579,10 @@
             "rowHeight": 38,
             "zIndex": 20
           },
-          "slider": { "thumbSize": 14, "trackSize": 3 },
+          "slider": {
+            "thumbSize": 14,
+            "trackSize": 3
+          },
           "labels": {
             "title": "Scroll speed",
             "reset": "Reset",
@@ -289,11 +592,41 @@
             "unit": "×"
           },
           "parts": {
-            "panel": { "preset": "speedPanel", "size": { "width": 100, "height": 100 } },
-            "header": { "preset": "speedHeader", "size": { "width": 100, "height": 100 } },
-            "reset": { "preset": "speedControl", "size": { "width": 22, "height": 100 } },
-            "slider": { "preset": "speedSlider", "size": { "width": 46, "height": 100 } },
-            "value": { "preset": "speedValue", "size": { "width": 26, "height": 100 } }
+            "panel": {
+              "preset": "speedPanel",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "header": {
+              "preset": "speedHeader",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "reset": {
+              "preset": "speedControl",
+              "size": {
+                "width": 22,
+                "height": 100
+              }
+            },
+            "slider": {
+              "preset": "speedSlider",
+              "size": {
+                "width": 46,
+                "height": 100
+              }
+            },
+            "value": {
+              "preset": "speedValue",
+              "size": {
+                "width": 26,
+                "height": 100
+              }
+            }
           }
         },
         {
@@ -302,9 +635,17 @@
           "parentId": "windowsBar",
           "label": "Application title",
           "enabled": false,
-          "bounds": { "x": 2, "y": 8, "width": 60, "height": 84 },
+          "bounds": {
+            "x": 2,
+            "y": 8,
+            "width": 60,
+            "height": 84
+          },
           "preset": "title",
-          "interaction": { "pointerEvents": "none", "dragRegion": "inherit" }
+          "interaction": {
+            "pointerEvents": "none",
+            "dragRegion": "inherit"
+          }
         },
         {
           "id": "readerOpen",
@@ -312,12 +653,20 @@
           "parentId": "windowsBar",
           "label": "Open CBZ",
           "enabled": true,
-          "bounds": { "x": 85, "y": 8, "width": 4.5, "height": 84 },
+          "bounds": {
+            "x": 85,
+            "y": 8,
+            "width": 4.5,
+            "height": 84
+          },
           "preset": "captionButton",
           "replaceLabel": "Open another CBZ",
           "folderPath": "D:\\[ MANGA ]\\Citadel",
           "rememberFolder": true,
-          "icons": { "open": "folderOpen", "busy": "hourglass" }
+          "icons": {
+            "open": "folderOpen",
+            "busy": "hourglass"
+          }
         },
         {
           "kind": "row",
@@ -326,7 +675,12 @@
           "parentId": "windowsBar",
           "label": "Window controls",
           "enabled": true,
-          "bounds": { "x": 89.75, "y": 8, "width": 9.25, "height": 84 },
+          "bounds": {
+            "x": 89.75,
+            "y": 8,
+            "width": 9.25,
+            "height": 84
+          },
           "preset": "base",
           "order": ["maximize", "close"],
           "gap": 2.702702,
@@ -338,7 +692,10 @@
               "label": "Restore default window size",
               "enabled": true,
               "preset": "captionButton",
-              "size": { "width": 48.648648, "height": 100 },
+              "size": {
+                "width": 48.648648,
+                "height": 100
+              },
               "icon": "maximize",
               "action": "restoreDefault",
               "restoreLabel": "Restore window",
@@ -351,7 +708,10 @@
               "label": "Close window",
               "enabled": true,
               "preset": "closeButton",
-              "size": { "width": 48.648648, "height": 100 },
+              "size": {
+                "width": 48.648648,
+                "height": 100
+              },
               "icon": "close",
               "action": "close",
               "restoreLabel": "Restore window",
@@ -368,7 +728,12 @@
       "label": "Action bar",
       "enabled": false,
       "draggable": false,
-      "bounds": { "x": 0, "y": 7, "width": 100, "height": 6 },
+      "bounds": {
+        "x": 0,
+        "y": 7,
+        "width": 100,
+        "height": 6
+      },
       "preset": "actionBar",
       "children": []
     },
@@ -381,7 +746,12 @@
       "draggable": false,
       "overlay": false,
       "zIndex": 0,
-      "bounds": { "x": 0, "y": 0, "width": 100, "height": 100 },
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 100
+      },
       "preset": "workspace",
       "children": [
         {
@@ -390,9 +760,16 @@
           "parentId": "body",
           "label": "CBZ reader",
           "enabled": true,
-          "bounds": { "x": 0, "y": 0, "width": 100, "height": 100 },
+          "bounds": {
+            "x": 0,
+            "y": 0,
+            "width": 100,
+            "height": 100
+          },
           "preset": "base",
-          "interaction": { "dragRegion": "inherit" },
+          "interaction": {
+            "dragRegion": "inherit"
+          },
           "initialPages": 5,
           "maxDecodedMB": 1536,
           "maxRenderWidth": 4096,
@@ -405,7 +782,10 @@
           "renderer": "pixi",
           "maxFPS": 0,
           "tileMemoryMB": 128,
-          "momentum": { "enabled": true, "tickWindowMs": 150 },
+          "momentum": {
+            "enabled": true,
+            "tickWindowMs": 150
+          },
           "scrollbar": {
             "width": 15,
             "radius": 8,
@@ -431,8 +811,20 @@
             "zoomOut": "Zoom out"
           },
           "parts": {
-            "overlay": { "preset": "readerOverlay", "size": { "width": 100, "height": 100 } },
-            "status": { "preset": "readerStatus", "size": { "width": 100, "height": 100 } }
+            "overlay": {
+              "preset": "readerOverlay",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "status": {
+              "preset": "readerStatus",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            }
           }
         }
       ]
@@ -446,7 +838,12 @@
       "draggable": false,
       "overlay": true,
       "zIndex": 10,
-      "bounds": { "x": 0, "y": 96, "width": 100, "height": 4 },
+      "bounds": {
+        "x": 0,
+        "y": 96,
+        "width": 100,
+        "height": 4
+      },
       "preset": "base",
       "hoverPreset": "titleBar",
       "children": [
@@ -456,7 +853,12 @@
           "parentId": "bottomBar",
           "label": "Chapter navigation",
           "enabled": true,
-          "bounds": { "x": 21.44, "y": 8, "width": 57.12, "height": 84 },
+          "bounds": {
+            "x": 21.44,
+            "y": 8,
+            "width": 57.12,
+            "height": 84
+          },
           "preset": "base",
           "order": ["previous", "list", "next"],
           "gap": 1.470588,
@@ -479,14 +881,53 @@
           "parts": {
             "previous": {
               "preset": "captionButton",
-              "size": { "width": 32.352941, "height": 100 }
+              "size": {
+                "width": 32.352941,
+                "height": 100
+              }
             },
-            "list": { "preset": "captionButton", "size": { "width": 32.352941, "height": 100 } },
-            "next": { "preset": "captionButton", "size": { "width": 32.352941, "height": 100 } },
-            "panel": { "preset": "speedPanel", "size": { "width": 100, "height": 100 } },
-            "header": { "preset": "speedHeader", "size": { "width": 100, "height": 100 } },
-            "chapters": { "preset": "base", "size": { "width": 100, "height": 100 } },
-            "item": { "preset": "chapterItem", "size": { "width": 100, "height": 100 } }
+            "list": {
+              "preset": "captionButton",
+              "size": {
+                "width": 32.352941,
+                "height": 100
+              }
+            },
+            "next": {
+              "preset": "captionButton",
+              "size": {
+                "width": 32.352941,
+                "height": 100
+              }
+            },
+            "panel": {
+              "preset": "speedPanel",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "header": {
+              "preset": "speedHeader",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "chapters": {
+              "preset": "base",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            },
+            "item": {
+              "preset": "chapterItem",
+              "size": {
+                "width": 100,
+                "height": 100
+              }
+            }
           }
         },
         {
@@ -495,7 +936,12 @@
           "parentId": "bottomBar",
           "label": "Application status",
           "enabled": false,
-          "bounds": { "x": 2, "y": 8, "width": 96, "height": 84 },
+          "bounds": {
+            "x": 2,
+            "y": 8,
+            "width": 96,
+            "height": 84
+          },
           "preset": "status"
         }
       ]
@@ -503,106 +949,283 @@
   ],
   "connections": [
     {
-      "from": { "area": "body", "port": "dropOpen" },
-      "to": { "area": "native", "port": "dropOpen" }
+      "from": {
+        "area": "body",
+        "port": "dropOpen"
+      },
+      "to": {
+        "area": "native",
+        "port": "dropOpen"
+      }
     },
     {
-      "from": { "area": "bottomBar", "port": "navigateChapter" },
-      "to": { "area": "body", "port": "navigateChapter" }
+      "from": {
+        "area": "bottomBar",
+        "port": "navigateChapter"
+      },
+      "to": {
+        "area": "body",
+        "port": "navigateChapter"
+      }
     },
     {
-      "from": { "area": "body", "port": "navigation" },
-      "to": { "area": "bottomBar", "port": "navigation" }
+      "from": {
+        "area": "body",
+        "port": "navigation"
+      },
+      "to": {
+        "area": "bottomBar",
+        "port": "navigation"
+      }
     },
     {
-      "from": { "area": "windowsBar", "port": "setScrollSpeed" },
-      "to": { "area": "body", "port": "setScrollSpeed" }
+      "from": {
+        "area": "windowsBar",
+        "port": "setScrollSpeed"
+      },
+      "to": {
+        "area": "body",
+        "port": "setScrollSpeed"
+      }
     },
     {
-      "from": { "area": "body", "port": "scrollSpeed" },
-      "to": { "area": "windowsBar", "port": "scrollSpeed" }
+      "from": {
+        "area": "body",
+        "port": "scrollSpeed"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "scrollSpeed"
+      }
     },
     {
-      "from": { "area": "windowsBar", "port": "setSmoothScrollDuration" },
-      "to": { "area": "body", "port": "setSmoothScrollDuration" }
+      "from": {
+        "area": "windowsBar",
+        "port": "setSmoothScrollDuration"
+      },
+      "to": {
+        "area": "body",
+        "port": "setSmoothScrollDuration"
+      }
     },
     {
-      "from": { "area": "body", "port": "smoothScrollDuration" },
-      "to": { "area": "windowsBar", "port": "smoothScrollDuration" }
+      "from": {
+        "area": "body",
+        "port": "smoothScrollDuration"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "smoothScrollDuration"
+      }
     },
     {
-      "from": { "area": "native", "port": "readerPreferences" },
-      "to": { "area": "body", "port": "readerPreferences" }
+      "from": {
+        "area": "windowsBar",
+        "port": "setMomentumDuration"
+      },
+      "to": {
+        "area": "body",
+        "port": "setMomentumDuration"
+      }
     },
     {
-      "from": { "area": "body", "port": "saveReaderPreference" },
-      "to": { "area": "native", "port": "saveReaderPreference" }
-    },
-    { "from": { "area": "windowsBar", "port": "open" }, "to": { "area": "body", "port": "open" } },
-    {
-      "from": { "area": "body", "port": "readerState" },
-      "to": { "area": "windowsBar", "port": "readerState" }
-    },
-    {
-      "from": { "area": "windowsBar", "port": "action" },
-      "to": { "area": "native", "port": "windowAction" }
+      "from": {
+        "area": "body",
+        "port": "momentumDuration"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "momentumDuration"
+      }
     },
     {
-      "from": { "area": "native", "port": "windowState" },
-      "to": { "area": "windowsBar", "port": "windowState" }
+      "from": {
+        "area": "native",
+        "port": "readerPreferences"
+      },
+      "to": {
+        "area": "body",
+        "port": "readerPreferences"
+      }
     },
     {
-      "from": { "area": "native", "port": "title" },
-      "to": { "area": "windowsBar", "port": "title" }
+      "from": {
+        "area": "body",
+        "port": "saveReaderPreference"
+      },
+      "to": {
+        "area": "native",
+        "port": "saveReaderPreference"
+      }
     },
     {
-      "from": { "area": "body", "port": "archiveOpen" },
-      "to": { "area": "native", "port": "archiveOpen" }
+      "from": {
+        "area": "windowsBar",
+        "port": "open"
+      },
+      "to": {
+        "area": "body",
+        "port": "open"
+      }
     },
     {
-      "from": { "area": "body", "port": "externalOpen" },
-      "to": { "area": "native", "port": "externalOpen" }
+      "from": {
+        "area": "body",
+        "port": "readerState"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "readerState"
+      }
     },
     {
-      "from": { "area": "native", "port": "externalOpenRevision" },
-      "to": { "area": "body", "port": "externalOpenRevision" }
+      "from": {
+        "area": "windowsBar",
+        "port": "action"
+      },
+      "to": {
+        "area": "native",
+        "port": "windowAction"
+      }
     },
     {
-      "from": { "area": "body", "port": "chapterOpen" },
-      "to": { "area": "native", "port": "chapterOpen" }
+      "from": {
+        "area": "native",
+        "port": "windowState"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "windowState"
+      }
     },
     {
-      "from": { "area": "body", "port": "prepare" },
-      "to": { "area": "native", "port": "prepare" }
+      "from": {
+        "area": "native",
+        "port": "title"
+      },
+      "to": {
+        "area": "windowsBar",
+        "port": "title"
+      }
     },
     {
-      "from": { "area": "body", "port": "release" },
-      "to": { "area": "native", "port": "release" }
+      "from": {
+        "area": "body",
+        "port": "archiveOpen"
+      },
+      "to": {
+        "area": "native",
+        "port": "archiveOpen"
+      }
     },
     {
-      "from": { "area": "body", "port": "readerMetrics" },
-      "to": { "area": "native", "port": "readerMetrics" }
+      "from": {
+        "area": "body",
+        "port": "externalOpen"
+      },
+      "to": {
+        "area": "native",
+        "port": "externalOpen"
+      }
     },
     {
-      "from": { "area": "body", "port": "renderReserve" },
-      "to": { "area": "native", "port": "renderReserve" }
+      "from": {
+        "area": "native",
+        "port": "externalOpenRevision"
+      },
+      "to": {
+        "area": "body",
+        "port": "externalOpenRevision"
+      }
     },
     {
-      "from": { "area": "native", "port": "issues" },
-      "to": { "area": "bottomBar", "port": "issues" }
+      "from": {
+        "area": "body",
+        "port": "chapterOpen"
+      },
+      "to": {
+        "area": "native",
+        "port": "chapterOpen"
+      }
     },
     {
-      "from": { "area": "native", "port": "labels" },
-      "to": { "area": "bottomBar", "port": "labels" }
+      "from": {
+        "area": "body",
+        "port": "prepare"
+      },
+      "to": {
+        "area": "native",
+        "port": "prepare"
+      }
+    },
+    {
+      "from": {
+        "area": "body",
+        "port": "release"
+      },
+      "to": {
+        "area": "native",
+        "port": "release"
+      }
+    },
+    {
+      "from": {
+        "area": "body",
+        "port": "readerMetrics"
+      },
+      "to": {
+        "area": "native",
+        "port": "readerMetrics"
+      }
+    },
+    {
+      "from": {
+        "area": "body",
+        "port": "renderReserve"
+      },
+      "to": {
+        "area": "native",
+        "port": "renderReserve"
+      }
+    },
+    {
+      "from": {
+        "area": "native",
+        "port": "issues"
+      },
+      "to": {
+        "area": "bottomBar",
+        "port": "issues"
+      }
+    },
+    {
+      "from": {
+        "area": "native",
+        "port": "labels"
+      },
+      "to": {
+        "area": "bottomBar",
+        "port": "labels"
+      }
     }
   ],
   "development": {
     "inspectionEnabled": false,
-    "outline": { "color": "#7eabf5", "width": 1, "style": "dashed", "offset": -1 },
+    "outline": {
+      "color": "#7eabf5",
+      "width": 1,
+      "style": "dashed",
+      "offset": -1
+    },
     "label": {
       "preset": "inspectionLabel",
       "sizing": "content",
-      "bounds": { "x": 0, "y": 0, "width": 100, "height": 100 }
+      "bounds": {
+        "x": 0,
+        "y": 0,
+        "width": 100,
+        "height": 100
+      }
     }
   }
 }

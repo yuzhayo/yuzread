@@ -20,6 +20,8 @@ export interface WindowsAreaSettingSectionContext {
   controlParts: Record<'reset' | 'slider' | 'value', ResolvedPart>;
   smoothDurationMs: number | null;
   requestSmoothDuration(change: ReaderNumberSettingChange): Promise<Result>;
+  momentumDurationMs: number | null;
+  requestMomentumDuration(change: ReaderNumberSettingChange): Promise<Result>;
   report(issue: DiagnosticIssue): void;
 }
 export interface WindowsAreaSettingSectionDefinition {
