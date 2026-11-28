@@ -806,7 +806,7 @@ test('wheel gesture preserves isolated/stream travel and suppresses the old per-
       ripple(modern) < 0.05 && ripple(modern) < ripple(legacy) / 4,
       'joined ticks must not retain the old sawtooth acceleration',
     );
-    assert.ok(position > 3598 && position <= 3600);
+    assert.ok(Math.abs(position - 3600) < 0.01);
     assert.deepEqual(state, createWheelGesture());
     totals.push(position);
     let single = appendWheelTick(createWheelGesture(), 120, 0, 1, 150, 250),
@@ -816,7 +816,7 @@ test('wheel gesture preserves isolated/stream travel and suppresses the old per-
       single = next.state;
       travel += next.distance;
     }
-    assert.ok(travel > 178 && travel <= 180);
+    assert.ok(Math.abs(travel - 180) < 0.01);
     assert.deepEqual(single, createWheelGesture());
   }
   assert.ok(Math.max(...totals) - Math.min(...totals) < 0.1);
@@ -859,8 +859,8 @@ test('smooth-scroll duration changes delivery time without changing wheel distan
   const quick = run(100),
     soft = run(2000);
   assert.ok(quick.early > soft.early * 4);
-  assert.ok(quick.distance > 178 && quick.distance <= 180);
-  assert.ok(soft.distance > 178 && soft.distance <= 180);
+  assert.ok(Math.abs(quick.distance - 180) < 0.01);
+  assert.ok(Math.abs(soft.distance - 180) < 0.01);
   assert.deepEqual(quick.state, createWheelGesture());
   assert.deepEqual(soft.state, createWheelGesture());
 });

@@ -39,12 +39,14 @@ export interface WheelGesture {
   remaining: number;
   rate: number;
   lastTick: number | null;
+  settling: boolean;
 }
 export const createWheelGesture = (): WheelGesture => ({
   velocity: 0,
   remaining: 0,
   rate: 0,
   lastTick: null,
+  settling: false,
 });
 const creditLimit = (value: number, speed: number, duration: number) =>
   clampMomentum(value / duration, speed) * duration;
@@ -79,6 +81,7 @@ export function appendWheelTick(
     ),
     rate: clampMomentum(rate, speed),
     lastTick: Math.max(time, state.lastTick ?? time),
+    settling: false,
   };
 }
 export function scaleWheelGesture(
@@ -128,10 +131,38 @@ export function advanceWheelGesture(
   const seconds = Number.isFinite(elapsed) ? Math.max(0, Math.min(0.05, elapsed)) : 0;
   let velocity = clampMomentum(state.velocity, speed),
     remaining = creditLimit(state.remaining, speed, duration),
-    distance = 0;
+    distance = 0,
+    settling = state.settling;
   const steps = Math.max(1, Math.ceil(seconds / 0.004)),
     step = seconds / steps;
   for (let n = 0; n < steps; n++) {
+    if (settling) {
+      const direction = Math.sign(remaining),
+        rate = Math.abs(velocity);
+      if (!direction || !rate) {
+        distance += remaining;
+        remaining = 0;
+        velocity = 0;
+        settling = false;
+        continue;
+      }
+      // Finish the small residual with constant braking. The initial speed is
+      // continuous with the normal coast, while the final frame lands exactly.
+      const settleDuration = (2 * Math.abs(remaining)) / rate;
+      if (step >= settleDuration) {
+        distance += remaining;
+        remaining = 0;
+        velocity = 0;
+        settling = false;
+        continue;
+      }
+      const acceleration = rate / settleDuration,
+        travel = direction * (rate * step - 0.5 * acceleration * step * step);
+      distance += travel;
+      remaining -= travel;
+      velocity = direction * Math.max(0, rate - acceleration * step);
+      continue;
+    }
     const at = now - (seconds - (n + 1) * step) * 1000;
     const joined = state.lastTick !== null && at - state.lastTick <= windowMs;
     const direction = Math.sign(remaining);
@@ -149,12 +180,20 @@ export function advanceWheelGesture(
     }
     remaining -= travel;
     distance += travel;
+    if (
+      Math.abs(remaining) > 0.000001 &&
+      Math.abs(remaining) < speed &&
+      Math.abs(velocity) < STOP_SPEED * speed &&
+      remaining * velocity >= 0
+    )
+      settling = true;
   }
-  const moving = Math.abs(remaining) >= speed || Math.abs(velocity) >= STOP_SPEED * speed;
+  const moving =
+    settling || Math.abs(remaining) >= speed || Math.abs(velocity) >= STOP_SPEED * speed;
   return {
     distance,
     moving,
-    state: moving ? { ...state, velocity, remaining } : createWheelGesture(),
+    state: moving ? { ...state, velocity, remaining, settling } : createWheelGesture(),
   };
 }
 // Rendering follows a deadline accumulator; late frames never produce catch-up bursts.

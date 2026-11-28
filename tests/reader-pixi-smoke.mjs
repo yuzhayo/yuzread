@@ -13,6 +13,19 @@ const evidence = path.join(root, '.runtime', `reader-pixi-${Date.now()}`);
 const appRoot = path.join(evidence, 'app');
 const dpiIndex = process.argv.indexOf('--dpi');
 const dpi = dpiIndex >= 0 ? Number(process.argv[dpiIndex + 1]) : 1;
+const traceUserSettings = process.argv.includes('--trace-user-settings');
+const qaProfile = traceUserSettings ? `t${Date.now()}` : null;
+if (qaProfile) {
+  const userData = path.join(appRoot, '.runtime', `qa-profile-${qaProfile}`);
+  await mkdir(userData, { recursive: true });
+  await writeFile(
+    path.join(userData, 'reader-preferences.json'),
+    JSON.stringify({
+      version: 1,
+      values: { scrollSpeed: 42, smoothScrollDurationMs: 650, momentumDurationMs: 300 },
+    }),
+  );
+}
 await mkdir(path.join(evidence, 'pages'), { recursive: true });
 for (let index = 0; index < 3; index++) {
   await sharp({
@@ -36,6 +49,13 @@ await mkdir(path.join(appRoot, 'electron'), { recursive: true });
 for (const directory of ['screen-built', 'electron-built', 'electron/assets'])
   await cp(path.join(root, directory), path.join(appRoot, directory), { recursive: true });
 await cp(path.join(root, 'electron/config.json'), path.join(appRoot, 'electron/config.json'));
+for (const role of ['reader', 'library', 'downloader']) {
+  await mkdir(path.join(appRoot, 'electron', role), { recursive: true });
+  await cp(
+    path.join(root, 'electron', role, 'application.json'),
+    path.join(appRoot, 'electron', role, 'application.json'),
+  );
+}
 const config = JSON.parse(await readFile(path.join(root, 'screen/config.json'), 'utf8'));
 config.areas
   .find((area) => area.id === 'body')
@@ -52,7 +72,12 @@ const errors = [];
 try {
   app = await _electron.launch({
     executablePath: path.join(root, 'node_modules/electron/dist/electron.exe'),
-    args: [appRoot, '--qa', `--force-device-scale-factor=${dpi}`],
+    args: [
+      appRoot,
+      '--qa',
+      ...(qaProfile ? [`--qa-profile=${qaProfile}`] : []),
+      `--force-device-scale-factor=${dpi}`,
+    ],
     cwd: appRoot,
     env,
     timeout: 15000,
@@ -155,15 +180,15 @@ try {
     const post = globalThis.postMessage.bind(globalThis);
     globalThis.postMessage = (value, ...args) => {
       if (value.kind === 'position') {
-        globalThis.motionTrace.push({ direction: 'out', ...value });
-        if (globalThis.motionTrace.length > 30) globalThis.motionTrace.shift();
+        globalThis.motionTrace.push({ at: performance.now(), direction: 'out', ...value });
+        if (globalThis.motionTrace.length > 500) globalThis.motionTrace.shift();
       }
       return post(value, ...args);
     };
     globalThis.addEventListener('message', (event) => {
       if (['wheel', 'stop', 'rebase'].includes(event.data.kind)) {
-        globalThis.motionTrace.push({ direction: 'in', ...event.data });
-        if (globalThis.motionTrace.length > 30) globalThis.motionTrace.shift();
+        globalThis.motionTrace.push({ at: performance.now(), direction: 'in', ...event.data });
+        if (globalThis.motionTrace.length > 500) globalThis.motionTrace.shift();
       }
     });
   });
@@ -240,6 +265,27 @@ try {
     });
   }
   const top = () => page.evaluate(() => document.querySelector('[data-reader-viewport]').scrollTop);
+  await worker.evaluate(() => {
+    globalThis.motionTrace = [];
+  });
+  await page.evaluate(() => {
+    window.motionFrameTrace = [];
+    window.motionFrameTraceActive = true;
+    const sample = (time) => {
+      if (!window.motionFrameTraceActive) return;
+      const view = document.querySelector('[data-reader-viewport]'),
+        canvas = document.querySelector('[data-reader-pixi]');
+      window.motionFrameTrace.push({
+        time,
+        top: view?.scrollTop,
+        moving: view?.dataset.readerMoving,
+        blockedFrames: Number(canvas?.dataset.pixiBlockedFrames ?? 0),
+        revision: Number(canvas?.dataset.pixiRevision ?? 0),
+      });
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
   await page.mouse.move(450, 300);
   await page.mouse.wheel(0, 120);
   await page.waitForFunction(
@@ -258,6 +304,13 @@ try {
   const settled = await top();
   await page.waitForTimeout(100);
   assert.ok(Math.abs((await top()) - settled) < 1, 'momentum must stop when idle');
+  const motionTrace = await page.evaluate(() => {
+    window.motionFrameTraceActive = false;
+    return {
+      frames: window.motionFrameTrace,
+    };
+  });
+  motionTrace.worker = await worker.evaluate(() => globalThis.motionTrace);
   await page.waitForFunction(
     () => Number(document.querySelector('[data-reader-pixi]').dataset.pixiPages) >= 6,
     null,
@@ -439,6 +492,7 @@ try {
       presentedFPS: 'not measured',
       fullPixiReader: true,
     },
+    motionTrace,
     evidence,
   };
   await writeFile(path.join(evidence, 'result.json'), JSON.stringify(result, null, 2));
